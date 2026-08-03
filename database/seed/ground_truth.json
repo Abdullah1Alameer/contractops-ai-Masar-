@@ -1,0 +1,98 @@
+{
+  "contracts": [
+    {
+      "file": "main_contract.docx",
+      "title": "عقد مقاولة رئيسي — مشروع واجهة الرياض المرحلة الثالثة",
+      "type": "main",
+      "party_a_contains": "تطوير واجهة الرياض",
+      "party_b_contains": "البنيان الحديثة",
+      "value_sar": 12000000,
+      "start_date": "2026-05-02",
+      "start_date_raw_hijri": "15/11/1447",
+      "end_date": "2027-11-14",
+      "end_date_raw_hijri": "15/6/1449",
+      "bond_expiry": "2026-08-16",
+      "retention_pct": 5,
+      "governing_law_contains": "المملكة العربية السعودية",
+      "notice_periods": [
+        {
+          "days": 60,
+          "clause_ref": "١٢/٣",
+          "purpose": "إشعار المطالبات وطلبات التمديد"
+        },
+        {
+          "days": 30,
+          "clause_ref": "١٢/٤",
+          "purpose": "إشعار تعليق الأعمال"
+        }
+      ],
+      "obligations_keywords": [
+        [
+          "الجدول الزمني"
+        ],
+        [
+          "تقرير",
+          "شهري"
+        ],
+        [
+          "تأمين"
+        ],
+        [
+          "ضمان نهائي",
+          "خطاب ضمان"
+        ]
+      ],
+      "milestones_count": 4,
+      "penalties": [
+        {
+          "type": "غرامة تأخير",
+          "rate_contains": "20",
+          "cap": null,
+          "clause_ref": "١١/٢"
+        }
+      ]
+    },
+    {
+      "file": "sub_contract.docx",
+      "title": "عقد توريد حديد التسليح — مؤسسة الحديد الوطنية",
+      "type": "subcontract",
+      "party_a_contains": "البنيان الحديثة",
+      "party_b_contains": "الحديد الوطنية",
+      "value_sar": 1800000,
+      "start_date": "2026-07-19",
+      "start_date_raw_hijri": "5/2/1448",
+      "end_date": "2026-12-09",
+      "end_date_raw_hijri": "29/6/1448",
+      "governing_law_contains": "المملكة العربية السعودية",
+      "notice_periods": [
+        {
+          "days": 15,
+          "clause_ref": "٦/٣",
+          "purpose": "سداد الفواتير"
+        },
+        {
+          "days": 10,
+          "clause_ref": "١٢/١",
+          "purpose": "الإخطار بالعيوب"
+        }
+      ],
+      "obligations_keywords": [
+        [
+          "توريد",
+          "٤٥",
+          "45"
+        ],
+        [
+          "شهادات الفحص",
+          "المطابقة"
+        ],
+        [
+          "تأمين"
+        ]
+      ],
+      "milestones_count": 0,
+      "penalties": [],
+      "deliberate_gap": "NO back-to-back LD clause (F4 flow-down must flag it)"
+    }
+  ]
+}

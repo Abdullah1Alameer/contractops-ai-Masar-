@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16
+    container_name: contractops-db
+    environment:
+      POSTGRES_DB: contractops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # migrations run automatically on FIRST boot of a fresh volume
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  pgdata: {}

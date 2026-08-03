@@ -1,0 +1,529 @@
+{
+  "name": "contract_extraction",
+  "strict": true,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "language": {
+        "type": "string",
+        "enum": [
+          "ar",
+          "en",
+          "mixed"
+        ]
+      },
+      "calendar": {
+        "type": "string",
+        "enum": [
+          "gregorian",
+          "hijri",
+          "mixed"
+        ]
+      },
+      "parties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "a": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "b": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ]
+      },
+      "value_sar": {
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "start_date_raw": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "detected_calendar": {
+                "type": "string",
+                "enum": [
+                  "hijri",
+                  "gregorian"
+                ]
+              },
+              "clause_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "quote": {
+                "type": "string"
+              },
+              "page": {
+                "type": "integer"
+              },
+              "confidence": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "detected_calendar",
+              "clause_ref",
+              "quote",
+              "page",
+              "confidence"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "end_date_raw": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "detected_calendar": {
+                "type": "string",
+                "enum": [
+                  "hijri",
+                  "gregorian"
+                ]
+              },
+              "clause_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "quote": {
+                "type": "string"
+              },
+              "page": {
+                "type": "integer"
+              },
+              "confidence": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "detected_calendar",
+              "clause_ref",
+              "quote",
+              "page",
+              "confidence"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "governing_law": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "retention_pct": {
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "bond_expiry_raw": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "detected_calendar": {
+                "type": "string",
+                "enum": [
+                  "hijri",
+                  "gregorian"
+                ]
+              },
+              "clause_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "quote": {
+                "type": "string"
+              },
+              "page": {
+                "type": "integer"
+              },
+              "confidence": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "detected_calendar",
+              "clause_ref",
+              "quote",
+              "page",
+              "confidence"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "warranty_end_raw": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "detected_calendar": {
+                "type": "string",
+                "enum": [
+                  "hijri",
+                  "gregorian"
+                ]
+              },
+              "clause_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "quote": {
+                "type": "string"
+              },
+              "page": {
+                "type": "integer"
+              },
+              "confidence": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "detected_calendar",
+              "clause_ref",
+              "quote",
+              "page",
+              "confidence"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "notice_periods": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "purpose": {
+              "type": "string"
+            },
+            "days": {
+              "type": "integer"
+            },
+            "clause_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quote": {
+              "type": "string"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "confidence": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "purpose",
+            "days",
+            "clause_ref",
+            "quote",
+            "page",
+            "confidence"
+          ]
+        }
+      },
+      "obligations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "responsible_party": {
+              "type": "string"
+            },
+            "due_date_raw": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "value": {
+                      "type": "string"
+                    },
+                    "detected_calendar": {
+                      "type": "string",
+                      "enum": [
+                        "hijri",
+                        "gregorian"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "detected_calendar"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "due_in_days": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "penalty_text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clause_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quote": {
+              "type": "string"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "confidence": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "description",
+            "responsible_party",
+            "due_date_raw",
+            "due_in_days",
+            "penalty_text",
+            "clause_ref",
+            "quote",
+            "page",
+            "confidence"
+          ]
+        }
+      },
+      "payment_milestones": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "seq": {
+              "type": "integer"
+            },
+            "label": {
+              "type": "string"
+            },
+            "amount_sar": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "amount_pct": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "preconditions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "clause_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quote": {
+              "type": "string"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "confidence": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "seq",
+            "label",
+            "amount_sar",
+            "amount_pct",
+            "preconditions",
+            "clause_ref",
+            "quote",
+            "page",
+            "confidence"
+          ]
+        }
+      },
+      "penalties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "rate": {
+              "type": "string"
+            },
+            "cap": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clause_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "quote": {
+              "type": "string"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "confidence": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "rate",
+            "cap",
+            "clause_ref",
+            "quote",
+            "page",
+            "confidence"
+          ]
+        }
+      },
+      "field_confidences": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "parties": {
+            "type": "number"
+          },
+          "value_sar": {
+            "type": "number"
+          },
+          "start_date": {
+            "type": "number"
+          },
+          "end_date": {
+            "type": "number"
+          },
+          "governing_law": {
+            "type": "number"
+          },
+          "retention_pct": {
+            "type": "number"
+          },
+          "bond_expiry": {
+            "type": "number"
+          },
+          "warranty_end": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "parties",
+          "value_sar",
+          "start_date",
+          "end_date",
+          "governing_law",
+          "retention_pct",
+          "bond_expiry",
+          "warranty_end"
+        ]
+      }
+    },
+    "required": [
+      "language",
+      "calendar",
+      "parties",
+      "value_sar",
+      "start_date_raw",
+      "end_date_raw",
+      "governing_law",
+      "retention_pct",
+      "bond_expiry_raw",
+      "warranty_end_raw",
+      "notice_periods",
+      "obligations",
+      "payment_milestones",
+      "penalties",
+      "field_confidences"
+    ]
+  }
+}
