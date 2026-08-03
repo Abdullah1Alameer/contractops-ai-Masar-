@@ -7,13 +7,17 @@ F0 (أساس عربي RTL) + F1 (الاستخراج الذكي بالمصادر 
 
 - Python 3.11+
 - Node.js 20+
-- Docker (for local Postgres) — or a Supabase `DATABASE_URL`
+- **قاعدة البيانات: Supabase (الافتراضي للتيم — بدون أي تثبيت)** أو Docker لمن يريد Postgres محلي
 
 ## Setup (once)
 
+**قاعدة البيانات — يسويها عضو واحد فقط مرة واحدة:**
+أنشئ مشروع Supabase مجاني → انسخ الـ connection string من Settings → Database →
+حطه في `.env` كـ `DATABASE_URL` → شغّل `python database/migrate.py`.
+بعدها شارك نفس `DATABASE_URL` مع كل التيم — ما يحتاجون يسوون شيئاً.
+
 ```bash
-cp .env.example .env          # then put your real OPENAI_API_KEY
-docker-compose up -d          # postgres + auto-applies database/migrations on first boot
+cp .env.example .env          # then put your real OPENAI_API_KEY + DATABASE_URL
 
 cd backend
 python -m venv .venv
@@ -25,8 +29,8 @@ npm install
 copy .env.local.example .env.local
 ```
 
-> Using Supabase instead of Docker? Set `DATABASE_URL` in `.env` and run
-> `python database/migrate.py` to apply migrations.
+> بديل محلي (اختياري): `docker-compose up -d` يشغّل Postgres محلياً ويطبّق
+> الـ migrations تلقائياً عند أول تشغيل — مفيد ليوم العرض بدون إنترنت.
 
 ## Run (two commands)
 

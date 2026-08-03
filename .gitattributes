@@ -1,0 +1,4 @@
+# Normalize line endings across the team (Windows/mac/linux)
+* text=auto
+*.docx binary
+*.pdf binary
