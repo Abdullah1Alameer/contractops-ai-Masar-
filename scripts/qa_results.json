@@ -1,0 +1,382 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "endpoints": [
+    {
+      "name": "GET /healthz",
+      "method": "GET",
+      "path": "/healthz",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /api/contracts",
+      "method": "GET",
+      "path": "/api/contracts",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /api/dashboard",
+      "method": "GET",
+      "path": "/api/dashboard",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": "true",
+      "note": "placeholder backend; frontend uses client aggregation",
+      "body_keys": [
+        "contracts",
+        "deadlines_next_30_days",
+        "overdue_obligations",
+        "claimable_milestones_sar"
+      ]
+    },
+    {
+      "name": "GET /api/demo/today",
+      "method": "GET",
+      "path": "/api/demo/today",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST /api/demo/today",
+      "method": "POST",
+      "path": "/api/demo/today",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST /api/contracts Arabic filename",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 201,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null,
+      "contract_id": "1e874a94-0f69-4776-89da-7067c40d1ded"
+    },
+    {
+      "name": "POST /api/contracts disposable",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 201,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null,
+      "contract_id": "e118462f-46f4-471f-b76c-7b2d5e1cada8"
+    },
+    {
+      "name": "GET /api/contracts/{id}",
+      "method": "GET",
+      "path": "/api/contracts/e118462f-46f4-471f-b76c-7b2d5e1cada8",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET obligations pre-extract",
+      "method": "GET",
+      "path": "/api/contracts/e118462f-46f4-471f-b76c-7b2d5e1cada8/obligations",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /deadlines",
+      "method": "GET",
+      "path": "/api/contracts/e7a5d872-6fe5-435a-9aac-2d6aa7c201b7/deadlines",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST deadlines/rebuild",
+      "method": "POST",
+      "path": "/api/contracts/e7a5d872-6fe5-435a-9aac-2d6aa7c201b7/deadlines/rebuild",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /milestones",
+      "method": "GET",
+      "path": "/api/contracts/e7a5d872-6fe5-435a-9aac-2d6aa7c201b7/milestones",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "PATCH /obligations/{id}",
+      "method": "PATCH",
+      "path": "/api/obligations/672267ba-569d-4d2d-8c4d-d0c4c265de7c",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST /events",
+      "method": "POST",
+      "path": "/api/contracts/e7a5d872-6fe5-435a-9aac-2d6aa7c201b7/events",
+      "expected_status": 201,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /raw page=1",
+      "method": "GET",
+      "path": "/api/contracts/e7a5d872-6fe5-435a-9aac-2d6aa7c201b7/raw",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /flowdown/contracts",
+      "method": "GET",
+      "path": "/api/flowdown/contracts",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /flowdown cached",
+      "method": "GET",
+      "path": "/api/flowdown",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "DELETE /api/contracts/{id}",
+      "method": "DELETE",
+      "path": "/api/contracts/e118462f-46f4-471f-b76c-7b2d5e1cada8",
+      "expected_status": 204,
+      "actual_status": 204,
+      "pass": true,
+      "placeholder": null
+    }
+  ],
+  "negative": [
+    {
+      "name": "GET /api/contracts no auth",
+      "method": "GET",
+      "path": "/api/contracts",
+      "expected_status": 401,
+      "actual_status": 401,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET invalid UUID",
+      "method": "GET",
+      "path": "/api/contracts/not-a-uuid",
+      "expected_status": 422,
+      "actual_status": 422,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET unknown contract",
+      "method": "GET",
+      "path": "/api/contracts/51a14ba3-402f-4b0c-bd4c-0990c5d102fc",
+      "expected_status": 404,
+      "actual_status": 404,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST unsupported .txt",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 400,
+      "actual_status": 400,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST empty.pdf",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 422,
+      "actual_status": 422,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST corrupt.pdf",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 422,
+      "actual_status": 422,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST oversized",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 413,
+      "actual_status": 413,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET deadlines not ready",
+      "method": "GET",
+      "path": "/api/contracts/e118462f-46f4-471f-b76c-7b2d5e1cada8/deadlines",
+      "expected_status": 409,
+      "actual_status": 409,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST flowdown wrong pair",
+      "method": "POST",
+      "path": "/api/flowdown",
+      "expected_status": 422,
+      "actual_status": 422,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST flowdown same id",
+      "method": "POST",
+      "path": "/api/flowdown",
+      "expected_status": 422,
+      "actual_status": 422,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET deleted contract",
+      "method": "GET",
+      "path": "/api/contracts/e118462f-46f4-471f-b76c-7b2d5e1cada8",
+      "expected_status": 404,
+      "actual_status": 404,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "PATCH unknown milestone",
+      "method": "PATCH",
+      "path": "/api/milestones/32d59b9b-fa64-4dfe-9d13-40ece196050d",
+      "expected_status": 404,
+      "actual_status": 404,
+      "pass": true,
+      "placeholder": null
+    }
+  ],
+  "db_integrity": [
+    {
+      "name": "Arabic title round-trip",
+      "pass": true,
+      "title": "عقد اختبار QA"
+    },
+    {
+      "name": "deadline rebuild idempotent count",
+      "pass": true,
+      "counts": [
+        5,
+        5,
+        5
+      ]
+    },
+    {
+      "name": "milestone rebuild idempotent count",
+      "pass": true,
+      "counts": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "orphan clauses",
+      "pass": true,
+      "count": 0
+    },
+    {
+      "name": "orphan extractions",
+      "pass": true,
+      "count": 0
+    },
+    {
+      "name": "orphan obligations",
+      "pass": true,
+      "count": 0
+    },
+    {
+      "name": "orphan deadlines",
+      "pass": true,
+      "count": 0
+    },
+    {
+      "name": "orphan events",
+      "pass": true,
+      "count": 0
+    },
+    {
+      "name": "orphan payment_milestones",
+      "pass": true,
+      "count": 0
+    },
+    {
+      "name": "delete cascade",
+      "pass": true,
+      "before": {
+        "clauses": 0,
+        "extractions": 0,
+        "obligations": 0,
+        "deadlines": 0,
+        "events": 0,
+        "payment_milestones": 0
+      },
+      "after": {
+        "clauses": 0,
+        "extractions": 0,
+        "obligations": 0,
+        "deadlines": 0,
+        "events": 0,
+        "payment_milestones": 0
+      }
+    }
+  ],
+  "perf_ms": {
+    "GET /api/contracts": 1099.9,
+    "GET /api/contracts/{id}": 644.2,
+    "GET /deadlines": 1208.8,
+    "GET /milestones": 1196.0,
+    "GET /flowdown cached": 1429.9
+  },
+  "ai": {
+    "supported_extract": {
+      "skipped": true
+    }
+  },
+  "errors": [],
+  "summary": {
+    "endpoints_pass": 18,
+    "endpoints_fail": 0,
+    "negative_pass": 12,
+    "negative_total": 12,
+    "db_integrity_pass": 10,
+    "db_integrity_total": 10
+  }
+}
