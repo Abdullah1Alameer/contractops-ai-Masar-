@@ -2,16 +2,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 import DualDate from "@/components/DualDate";
+import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
+import EmptyState from "@/components/ui/EmptyState";
+import { SkeletonCard } from "@/components/ui/Skeleton";
 import { ApiError, fetchDeadlines } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { DeadlineRow, DeadlineSummary, SourceTarget } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const SEV_DOT: Record<string, string> = {
-  normal: "bg-gray-400",
-  info: "bg-blue-500",
-  warning: "bg-amber-500",
-  critical: "bg-red-600",
+  normal: "bg-gray-400 ring-gray-400/70",
+  info: "bg-info-500 ring-info-500/70",
+  warning: "bg-warning-500 ring-warning-500/70",
+  critical: "bg-danger-600 ring-danger-600/70",
 };
 
 function typeKey(t: string): TKey {
@@ -64,15 +68,15 @@ export default function DeadlineTimeline({
   if (!["ready", "needs_review"].includes(contractStatus)) {
     return <p className="py-8 text-center text-sm text-gray-500">{t("timeline.incomplete")}</p>;
   }
-  if (loading) return <p className="py-8 text-center text-sm text-gray-400">{t("common.loading")}</p>;
+  if (loading) return <SkeletonCard rows={4} />;
   if (error === "409") return <p className="py-8 text-center text-sm text-amber-700">{t("timeline.error409")}</p>;
   if (error)
     return (
       <div className="py-8 text-center">
         <p className="mb-2 text-sm text-red-600">{t("common.error")}</p>
-        <button onClick={load} className="rounded-md border px-3 py-1 text-sm hover:bg-gray-50">
+        <Button variant="secondary" size="sm" onClick={load}>
           {t("common.retry")}
-        </button>
+        </Button>
       </div>
     );
 
@@ -88,22 +92,25 @@ export default function DeadlineTimeline({
           <Stat label={t("timeline.summary.needsReview")} value={summary.needs_review} />
         </div>
       )}
-      {rows.length === 0 && <p className="py-6 text-center text-sm text-gray-400">{t("timeline.empty")}</p>}
+      {rows.length === 0 && <EmptyState title={t("empty.deadlines")} description={t("timeline.empty")} />}
       <ul className="space-y-0 border-s-2 border-gray-200 ps-4">
         {rows.map((d) => (
           <li key={d.id} className="relative pb-6 last:pb-0">
             <span
               className={cn(
-                "absolute -start-[9px] top-1 h-3 w-3 rounded-full ring-2 ring-white",
-                SEV_DOT[d.severity] ?? "bg-gray-400"
+                "absolute -start-[11px] top-1 h-3.5 w-3.5 rounded-full ring-4 ring-white motion-safe:transition-shadow",
+                SEV_DOT[d.severity] ?? "bg-gray-400 ring-gray-400/70"
               )}
             />
             <div
               className={cn(
-                "rounded-lg border p-3 shadow-sm",
-                d.time_barred && "border-red-300 bg-red-50",
-                d.needs_review && "border-amber-300 bg-amber-50/50",
-                d.status === "missed" && !d.time_barred && "border-red-200 bg-red-50/30"
+                "rounded-lg border p-4 shadow-card motion-safe:transition-colors",
+                d.status === "critical" || d.severity === "critical" ? "border-danger-500" : "",
+                d.time_barred && "border-danger-700 bg-danger-50",
+                d.needs_review && "border-warning-400 bg-warning-50/40",
+                d.status === "missed" && !d.time_barred && "border-danger-600 bg-danger-50/30",
+                d.status === "upcoming" && "border-info-300",
+                !d.time_barred && !d.needs_review && d.status !== "missed" && d.status !== "upcoming" && "border-gray-200 bg-white"
               )}
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -113,13 +120,11 @@ export default function DeadlineTimeline({
                   </p>
                   <p className="text-xs text-gray-500">{t(typeKey(d.type))}</p>
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", severityClass(d.severity))}>
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge tone={severityTone(d.severity)} dot>
                     {t(`deadline.severity.${d.severity}` as TKey)}
-                  </span>
-                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
-                    {t(`deadline.status.${d.status}` as TKey)}
-                  </span>
+                  </Badge>
+                  <Badge tone={statusTone(d.status)}>{t(`deadline.status.${d.status}` as TKey)}</Badge>
                 </div>
               </div>
               {d.description && <p className="mt-1 text-sm text-gray-600">{d.description}</p>}
@@ -180,11 +185,18 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function severityClass(sev: string) {
-  if (sev === "critical") return "bg-red-100 text-red-800";
-  if (sev === "warning") return "bg-amber-100 text-amber-800";
-  if (sev === "info") return "bg-blue-100 text-blue-800";
-  return "bg-gray-100 text-gray-700";
+function severityTone(sev: string): "danger" | "warning" | "info" | "neutral" {
+  if (sev === "critical") return "danger";
+  if (sev === "warning") return "warning";
+  if (sev === "info") return "info";
+  return "neutral";
+}
+
+function statusTone(st: string): "danger" | "warning" | "info" | "neutral" {
+  if (st === "missed" || st === "time_barred") return "danger";
+  if (st === "needs_review") return "warning";
+  if (st === "upcoming") return "info";
+  return "neutral";
 }
 
 function formatDays(n: number, lang: "ar" | "en") {

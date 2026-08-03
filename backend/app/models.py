@@ -124,11 +124,21 @@ class PaymentMilestone(Base):
     id = _uuid_pk()
     contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
     seq = Column(Integer)
+    type = Column(Text, nullable=True)
     label = Column(Text)
+    description = Column(Text, nullable=True)
     amount_sar = Column(Numeric, nullable=True)
+    amount_percentage = Column(Numeric, nullable=True)
+    due_date = Column(Date, nullable=True)
     preconditions = Column(JSONB)
     status = Column(Text)
+    paid = Column(Boolean, nullable=False, default=False)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    confidence = Column(Numeric(3, 2), nullable=True)
+    generated = Column(Boolean, nullable=False, default=True)
     source_clause_id = Column(UUID(as_uuid=True), ForeignKey("clauses.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class FlowdownFinding(Base):
@@ -136,12 +146,19 @@ class FlowdownFinding(Base):
     id = _uuid_pk()
     main_contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
     subcontract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
+    category = Column(Text, nullable=False, default="other")
     obligation_summary = Column(Text)
     status = Column(Text)
-    main_clause_id = Column(UUID(as_uuid=True), ForeignKey("clauses.id"))
+    main_clause_id = Column(UUID(as_uuid=True), ForeignKey("clauses.id"), nullable=True)
     sub_clause_id = Column(UUID(as_uuid=True), ForeignKey("clauses.id"), nullable=True)
-    risk_note = Column(Text)
+    explanation = Column(Text, nullable=True)
+    recommendation = Column(Text, nullable=True)
+    main_citation = Column(Text, nullable=True)
+    sub_citation = Column(Text, nullable=True)
+    risk_note = Column(Text, nullable=True)
     severity = Column(Text)
+    confidence = Column(Numeric(3, 2), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class DemoSettings(Base):

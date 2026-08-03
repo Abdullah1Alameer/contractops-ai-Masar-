@@ -2,6 +2,8 @@
 import { useState } from "react";
 
 import { logContractEvent } from "@/lib/api";
+import Button from "@/components/ui/Button";
+import { Card, CardBody } from "@/components/ui/Card";
 import { useI18n, type TKey } from "@/lib/i18n";
 
 const EVENT_TYPES = ["delay", "defect", "suspension", "variation", "other"] as const;
@@ -40,25 +42,19 @@ export default function LogEventDialog({
 
   if (!open) {
     return (
-      <button
-        type="button"
-        onClick={() => {
-          setEventDate(demoToday);
-          setOpen(true);
-        }}
-        className="mb-4 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-semibold text-brand-800 hover:bg-brand-100"
-      >
+      <Button variant="secondary" size="sm" className="mb-4" onClick={() => { setEventDate(demoToday); setOpen(true); }}>
         {t("event.log")}
-      </button>
+      </Button>
     );
   }
 
   return (
-    <div className="mb-4 rounded-xl border bg-white p-4 shadow-sm">
+    <Card className="mb-4">
+      <CardBody>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1 text-sm">
           <span>{t("event.log")}</span>
-          <select className="rounded-md border px-2 py-1.5" value={type} onChange={(e) => setType(e.target.value as any)}>
+          <select className="rounded-lg border-2 border-gray-200 px-2 py-2 focus-visible:focus-ring" value={type} onChange={(e) => setType(e.target.value as any)}>
             {EVENT_TYPES.map((k) => (
               <option key={k} value={k}>
                 {t(`event.type.${k}` as TKey)}
@@ -68,27 +64,23 @@ export default function LogEventDialog({
         </label>
         <label className="grid gap-1 text-sm">
           {t("event.date")}
-          <input type="date" className="rounded-md border px-2 py-1.5" value={eventDate} onChange={(e) => setEventDate(e.target.value)} />
+          <input type="date" className="rounded-lg border-2 border-gray-200 px-2 py-2 focus-visible:focus-ring" value={eventDate} onChange={(e) => setEventDate(e.target.value)} />
         </label>
         <label className="grid gap-1 text-sm sm:col-span-2">
           {t("event.description")}
-          <input className="rounded-md border px-2 py-1.5" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <input className="rounded-lg border-2 border-gray-200 px-2 py-2 focus-visible:focus-ring" value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
       </div>
-      {error && <p className="mt-2 text-sm text-red-600">{t("common.error")}</p>}
+      {error && <p className="mt-2 text-sm text-danger-600">{t("common.error")}</p>}
       <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={submit}
-          className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-        >
+        <Button variant="primary" size="sm" loading={busy} onClick={submit}>
           {t("event.submit")}
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50">
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => setOpen(false)}>
           {t("event.cancel")}
-        </button>
+        </Button>
       </div>
-    </div>
+      </CardBody>
+    </Card>
   );
 }

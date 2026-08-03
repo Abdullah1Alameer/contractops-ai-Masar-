@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans_Arabic } from "next/font/google";
 
+import { ConfirmDialogProvider } from "@/components/feedback/ConfirmDialog";
+import { ToastProvider } from "@/components/feedback/ToastProvider";
 import Header from "@/components/Header";
 import { I18nProvider } from "@/lib/i18n";
 
@@ -21,8 +23,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html dir="rtl" lang="ar">
       <body className={plex.className}>
         <I18nProvider>
-          <Header />
-          <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+          <ToastProvider>
+            <ConfirmDialogProvider>
+              <Header />
+              <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+            </ConfirmDialogProvider>
+          </ToastProvider>
         </I18nProvider>
       </body>
     </html>

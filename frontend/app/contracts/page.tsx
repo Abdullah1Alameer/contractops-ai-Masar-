@@ -3,8 +3,13 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import CategoryBadge from "@/components/CategoryBadge";
+import { useConfirm } from "@/components/feedback/ConfirmDialog";
+import { useToast } from "@/components/feedback/ToastProvider";
 import StatusChip from "@/components/StatusChip";
 import TypeBadge from "@/components/TypeBadge";
+import Button from "@/components/ui/Button";
+import EmptyState from "@/components/ui/EmptyState";
+import { SkeletonTable } from "@/components/ui/Skeleton";
 import { api, deleteContract } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { ContractListItem } from "@/lib/types";
@@ -12,6 +17,8 @@ import { formatSAR } from "@/lib/utils";
 
 export default function ContractsPage() {
   const { t, lang } = useI18n();
+  const { confirm } = useConfirm();
+  const toast = useToast();
   const [rows, setRows] = useState<ContractListItem[] | null>(null);
   const [error, setError] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -24,61 +31,77 @@ export default function ContractsPage() {
 
   const onDelete = async (id: string) => {
     if (deletingId) return;
-    if (!window.confirm(t("list.deleteConfirm"))) return;
-    setDeletingId(id);
-    try {
-      await deleteContract(id);
-      setRows((prev) => prev?.filter((r) => r.id !== id) ?? null);
-    } catch {
-      alert(t("common.error"));
-    } finally {
-      setDeletingId(null);
-    }
+    await confirm({
+      title: t("confirm.deleteContract.title"),
+      body: t("confirm.deleteContract.body"),
+      confirmLabel: t("common.delete"),
+      danger: true,
+      onConfirm: async () => {
+        setDeletingId(id);
+        try {
+          await deleteContract(id);
+          setRows((prev) => prev?.filter((r) => r.id !== id) ?? null);
+          toast.success(t("toast.contractDeleted"));
+        } catch {
+          toast.error(t("common.error"));
+          throw new Error("delete failed");
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   };
 
   return (
-    <div>
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t("list.title")}</h1>
-        <Link href="/upload" className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-          {t("nav.upload")}
+    <div className="space-y-6 motion-safe:animate-fadeIn">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-2xl font-bold text-gray-900 md:text-3xl">{t("list.title")}</h1>
+        <Link href="/upload">
+          <Button variant="primary">{t("nav.upload")}</Button>
         </Link>
       </div>
 
       {error && (
-        <div className="rounded-xl border bg-white p-8 text-center">
-          <p className="mb-3 text-red-600">{t("common.error")}</p>
-          <button onClick={load} className="rounded-md border px-4 py-1.5 text-sm hover:bg-gray-50">
+        <div className="card-surface p-8 text-center">
+          <p className="mb-3 text-danger-600">{t("common.error")}</p>
+          <Button variant="secondary" onClick={load}>
             {t("common.retry")}
-          </button>
+          </Button>
         </div>
       )}
-      {!error && rows === null && <p className="p-8 text-center text-gray-400">{t("common.loading")}</p>}
+      {!error && rows === null && <SkeletonTable rows={6} />}
       {!error && rows?.length === 0 && (
-        <div className="rounded-xl border bg-white p-10 text-center text-gray-500">{t("list.empty")}</div>
+        <div className="card-surface">
+          <EmptyState
+            title={t("empty.contracts")}
+            description={t("list.empty")}
+            actionLabel={t("nav.upload")}
+            onAction={() => (window.location.href = "/upload")}
+          />
+        </div>
       )}
       {!error && rows && rows.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+        <div className="max-h-[70vh] overflow-auto rounded-xl border border-gray-200 bg-white shadow-card">
           <table className="w-full text-sm">
-            <thead className="border-b bg-gray-50 text-start text-gray-600">
+            <thead className="sticky top-0 z-10 border-b bg-muted-50 text-start text-gray-600 shadow-sm">
               <tr>
                 {(["list.col.title", "list.col.type", "list.col.party", "list.col.value", "list.col.obligations", "list.col.status"] as const).map((k) => (
-                  <th key={k} className="px-4 py-3 text-start font-medium">
+                  <th key={k} className="px-4 py-3.5 text-start font-semibold">
                     {t(k)}
                   </th>
                 ))}
-                <th className="px-4 py-3 text-start font-medium sr-only">{t("list.delete")}</th>
+                <th className="px-4 py-3.5 text-start font-semibold sr-only">{t("list.delete")}</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((c) => (
-                <tr key={c.id} className="border-b last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3">
+              {rows.map((c, i) => (
+                <tr key={c.id} className={`border-b last:border-0 hover:bg-muted-50/80 ${i % 2 === 1 ? "bg-muted-50/40" : ""}`}>
+                  <td className="px-4 py-3.5">
                     <Link href={`/contracts/${c.id}`} className="font-semibold text-brand-700 hover:underline">
                       {c.title}
                     </Link>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5">
                     <div className="flex flex-wrap items-center gap-1.5">
                       {c.status === "unsupported" || c.supported === false ? (
                         <StatusChip status="unsupported" />
@@ -90,29 +113,23 @@ export default function ContractsPage() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-700">{c.party_b ?? "—"}</td>
-                  <td className="px-4 py-3">{formatSAR(c.value_sar, lang)}</td>
-                  <td className="px-4 py-3 text-gray-600">
+                  <td className="px-4 py-3.5 text-gray-700">{c.party_b ?? "—"}</td>
+                  <td className="px-4 py-3.5 tabular-nums">{formatSAR(c.value_sar, lang)}</td>
+                  <td className="px-4 py-3.5 text-gray-600">
                     {c.obligation_counts.pending} {t("list.pending")}
                     {c.obligation_counts.overdue > 0 && (
-                      <span className="ms-2 font-semibold text-red-600">
+                      <span className="ms-2 font-semibold text-danger-600">
                         {c.obligation_counts.overdue} {t("list.overdue")}
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5">
                     <StatusChip status={c.status} />
                   </td>
-                  <td className="px-4 py-3 text-end">
-                    <button
-                      onClick={() => onDelete(c.id)}
-                      disabled={deletingId === c.id}
-                      title={t("list.delete")}
-                      aria-label={t("list.delete")}
-                      className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
-                    >
-                      {deletingId === c.id ? t("list.deleting") : t("list.delete")}
-                    </button>
+                  <td className="px-4 py-3.5 text-end">
+                    <Button variant="danger" size="sm" loading={deletingId === c.id} onClick={() => onDelete(c.id)}>
+                      {t("list.delete")}
+                    </Button>
                   </td>
                 </tr>
               ))}

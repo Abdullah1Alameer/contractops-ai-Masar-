@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import SegmentedControl from "@/components/ui/SegmentedControl";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -16,34 +17,44 @@ export default function Header() {
   const { t, lang, setLang } = useI18n();
   const pathname = usePathname();
   return (
-    <header className="border-b bg-white">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-8">
-          <Link href="/contracts" className="text-lg font-bold text-brand-700">
-            {t("appName")}
+    <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/95 backdrop-blur-sm">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4">
+        <div className="flex flex-wrap items-center gap-6 lg:gap-10">
+          <Link href="/contracts" className="flex items-center gap-2">
+            <span className="rounded-md bg-brand-50 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-brand-700">
+              AI
+            </span>
+            <span className="text-lg font-bold text-brand-800">{t("appName")}</span>
           </Link>
-          <nav className="flex items-center gap-1">
-            {links.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className={cn(
-                  "rounded-md px-3 py-1.5 text-sm font-medium",
-                  pathname.startsWith(l.href) ? "bg-brand-50 text-brand-700" : "text-gray-600 hover:bg-gray-50"
-                )}
-              >
-                {t(l.key)}
-              </Link>
-            ))}
+          <nav className="flex flex-wrap items-center gap-1">
+            {links.map((l) => {
+              const active = pathname === l.href || pathname.startsWith(`${l.href}/`);
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className={cn(
+                    "relative rounded-lg px-3 py-2 text-sm font-semibold motion-safe:transition-colors",
+                    active ? "text-brand-700" : "text-gray-600 hover:bg-muted-50 hover:text-gray-900"
+                  )}
+                >
+                  {t(l.key)}
+                  {active && (
+                    <span className="absolute inset-x-2 -bottom-0.5 h-0.5 rounded-full bg-brand-600" aria-hidden />
+                  )}
+                </Link>
+              );
+            })}
           </nav>
         </div>
-        <button
-          onClick={() => setLang(lang === "ar" ? "en" : "ar")}
-          className="rounded-md border px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          aria-label="toggle language"
-        >
-          {lang === "ar" ? "English" : "العربية"}
-        </button>
+        <SegmentedControl
+          value={lang}
+          options={[
+            { value: "ar", label: t("lang.ar") },
+            { value: "en", label: t("lang.en") },
+          ]}
+          onChange={setLang}
+        />
       </div>
     </header>
   );

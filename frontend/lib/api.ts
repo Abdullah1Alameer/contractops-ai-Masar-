@@ -96,3 +96,37 @@ export async function logContractEvent(
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
   );
 }
+
+export async function fetchMilestones(contractId: string) {
+  return api<import("./types").MilestonesResponse>(`/api/contracts/${contractId}/milestones`);
+}
+
+export async function rebuildMilestones(contractId: string) {
+  return api<import("./types").MilestonesResponse>(`/api/contracts/${contractId}/milestones/rebuild`, {
+    method: "POST",
+  });
+}
+
+export async function patchMilestone(
+  milestoneId: string,
+  body: { paid?: boolean; precondition_id?: string; completed?: boolean; preconditions?: unknown[] }
+) {
+  return apiJson<import("./types").PaymentMilestoneRow>(`/api/milestones/${milestoneId}`, "PATCH", body);
+}
+
+export async function listFlowdownContracts() {
+  return api<import("./types").FlowdownContractsList>("/api/flowdown/contracts");
+}
+
+export async function runFlowdown(mainId: string, subId: string) {
+  return apiJson<import("./types").FlowdownResponse>("/api/flowdown", "POST", {
+    main_contract_id: mainId,
+    subcontract_id: subId,
+  });
+}
+
+export async function getFlowdown(mainId: string, subId: string) {
+  return api<import("./types").FlowdownResponse>(
+    `/api/flowdown?main_id=${encodeURIComponent(mainId)}&sub_id=${encodeURIComponent(subId)}`
+  );
+}

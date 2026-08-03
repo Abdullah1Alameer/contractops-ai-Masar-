@@ -224,6 +224,14 @@ def run_extraction(contract_id, db: Session) -> dict:
     except Exception:
         db.rollback()
 
+    try:
+        from ..services.payments import build_payment_milestones_for_contract
+
+        build_payment_milestones_for_contract(contract.id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+
     return {
         "status": contract.status,
         "counts": {

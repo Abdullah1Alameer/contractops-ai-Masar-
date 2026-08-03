@@ -3,5 +3,34 @@
 @tailwind utilities;
 
 body {
-  @apply bg-gray-50 text-gray-900;
+  @apply bg-muted-50 text-gray-900 antialiased;
+}
+
+@layer utilities {
+  .focus-ring {
+    @apply outline-none ring-2 ring-brand-600 ring-offset-2 ring-offset-white;
+  }
+
+  .card-surface {
+    @apply rounded-xl border border-gray-200 bg-white shadow-card;
+  }
+
+  .hover-lift {
+    @apply motion-safe:transition-shadow motion-safe:duration-200 hover:shadow-cardHover;
+  }
+
+  .skeleton-shimmer {
+    background: linear-gradient(90deg, #f3f4f6 0%, #e5e7eb 50%, #f3f4f6 100%);
+    background-size: 200% 100%;
+    @apply motion-safe:animate-shimmer;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-safe\:animate-shimmer,
+  .motion-safe\:animate-fadeIn,
+  .motion-safe\:animate-slideUp,
+  .motion-safe\:animate-pulse {
+    animation: none !important;
+  }
 }

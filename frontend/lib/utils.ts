@@ -13,6 +13,23 @@ export function formatSAR(v: number | null | undefined, lang: "ar" | "en"): stri
   return lang === "ar" ? `${n} ر.س` : `SAR ${n}`;
 }
 
+/** Compact SAR for KPI cards (e.g. 1.2M). */
+export function formatCompactSAR(v: number | null | undefined, lang: "ar" | "en"): string {
+  if (v == null) return "—";
+  const abs = Math.abs(v);
+  let n: string;
+  if (abs >= 1_000_000) {
+    const m = v / 1_000_000;
+    n = m.toLocaleString(lang === "ar" ? "ar-SA-u-nu-arab" : "en-US", { maximumFractionDigits: 1 }) + "M";
+  } else if (abs >= 1_000) {
+    const k = v / 1_000;
+    n = k.toLocaleString(lang === "ar" ? "ar-SA-u-nu-arab" : "en-US", { maximumFractionDigits: 0 }) + "K";
+  } else {
+    n = new Intl.NumberFormat(lang === "ar" ? "ar-SA-u-nu-arab" : "en-US").format(v);
+  }
+  return lang === "ar" ? `${n} ر.س` : `SAR ${n}`;
+}
+
 const CATEGORY_TO_KEY: Record<string, TKey> = {
   "Main Construction Contract": "category.main_construction",
   "Subcontract Agreement": "category.subcontract",

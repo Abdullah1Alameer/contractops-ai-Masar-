@@ -3,6 +3,9 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import UnsupportedContractWarning from "@/components/UnsupportedContractWarning";
+import { useToast } from "@/components/feedback/ToastProvider";
+import Button from "@/components/ui/Button";
+import { Card, CardBody } from "@/components/ui/Card";
 import { api, ApiError, uploadContract, type ExtractResult } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -21,6 +24,7 @@ type Blocked = { category: string; confidence?: number; message?: string };
 
 export default function UploadPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -33,8 +37,16 @@ export default function UploadPage() {
     setErrorKey(null);
     setBlocked(null);
     if (!f) return;
-    if (!/\.(pdf|docx)$/i.test(f.name)) return setErrorKey("upload.err.type");
-    if (f.size > 20 * 1024 * 1024) return setErrorKey("upload.err.size");
+    if (!/\.(pdf|docx)$/i.test(f.name)) {
+      setErrorKey("upload.err.type");
+      toast.warning(t("upload.err.type"));
+      return;
+    }
+    if (f.size > 20 * 1024 * 1024) {
+      setErrorKey("upload.err.size");
+      toast.warning(t("upload.err.size"));
+      return;
+    }
     setFile(f);
   };
 
@@ -57,11 +69,14 @@ export default function UploadPage() {
         setFile(null);
         return;
       }
+      toast.success(t("toast.uploadSuccess"));
       router.push(`/contracts/${id}`);
     } catch (e) {
       setPhase("idle");
       const code = e instanceof ApiError ? e.code : "unknown";
-      setErrorKey(ERROR_KEYS[code] ?? "common.error");
+      const key = ERROR_KEYS[code] ?? "common.error";
+      setErrorKey(key);
+      toast.error(t(key));
     }
   };
 
@@ -74,20 +89,17 @@ export default function UploadPage() {
           confidence={blocked.confidence}
         />
         <div className="mx-auto max-w-2xl">
-          <button
-            onClick={() => setBlocked(null)}
-            className="rounded-lg border px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          >
+          <Button variant="secondary" onClick={() => setBlocked(null)}>
             {t("upload.tryAnother")}
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <h1 className="mb-6 text-2xl font-bold">{t("upload.title")}</h1>
+    <div className="mx-auto max-w-2xl space-y-6 motion-safe:animate-fadeIn">
+      <h1 className="text-2xl font-bold text-gray-900 md:text-3xl">{t("upload.title")}</h1>
 
       <div
         onDragOver={(e) => {
@@ -101,36 +113,34 @@ export default function UploadPage() {
           pick(e.dataTransfer.files?.[0]);
         }}
         className={cn(
-          "flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed bg-white p-10 text-center",
-          dragging ? "border-brand-600 bg-brand-50" : "border-gray-300"
+          "flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed bg-white p-10 text-center motion-safe:transition-all",
+          dragging ? "scale-[1.01] border-brand-600 bg-brand-50 shadow-cardHover" : "border-gray-300"
         )}
       >
         <p className="text-gray-600">
           {t("upload.drop")}{" "}
-          <button className="font-semibold text-brand-700 underline" onClick={() => inputRef.current?.click()}>
+          <button type="button" className="font-semibold text-brand-700 underline focus-visible:focus-ring" onClick={() => inputRef.current?.click()}>
             {t("upload.browse")}
           </button>
         </p>
         <p className="text-sm text-gray-400">{t("upload.hint")}</p>
-        {file && <p className="mt-2 rounded-md bg-gray-100 px-3 py-1 text-sm font-medium">{file.name}</p>}
+        {file && <p className="mt-2 rounded-md bg-muted-100 px-3 py-1 text-sm font-medium">{file.name}</p>}
         <input ref={inputRef} type="file" accept=".pdf,.docx" hidden onChange={(e) => pick(e.target.files?.[0])} />
       </div>
 
-      <div className="mt-6 grid gap-4 rounded-xl border bg-white p-6">
-        <button
-          onClick={submit}
-          disabled={!file || phase !== "idle"}
-          className="rounded-lg bg-brand-600 px-4 py-2.5 font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-        >
-          {phase === "idle" ? t("upload.submit") : phase === "uploading" ? t("upload.uploading") : t("upload.extracting")}
-        </button>
-        {phase === "extracting" && (
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
-            <div className="h-full w-1/2 animate-pulse rounded-full bg-brand-600" />
-          </div>
-        )}
-        {errorKey && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{t(errorKey)}</p>}
-      </div>
+      <Card>
+        <CardBody className="grid gap-4">
+          <Button onClick={submit} disabled={!file || phase !== "idle"} loading={phase !== "idle"} variant="primary" size="lg">
+            {phase === "idle" ? t("upload.submit") : phase === "uploading" ? t("upload.uploading") : t("upload.extracting")}
+          </Button>
+          {phase === "extracting" && (
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted-100">
+              <div className="h-full w-1/2 motion-safe:animate-pulse rounded-full bg-brand-600" />
+            </div>
+          )}
+          {errorKey && <p className="rounded-md bg-danger-50 px-3 py-2 text-sm text-danger-700">{t(errorKey)}</p>}
+        </CardBody>
+      </Card>
     </div>
   );
 }

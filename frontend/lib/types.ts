@@ -124,3 +124,102 @@ export interface DeadlinesResponse {
   deadlines: DeadlineRow[];
   summary: DeadlineSummary;
 }
+
+export interface Precondition {
+  id: string;
+  label: string;
+  type: string;
+  required: boolean;
+  completed: boolean;
+}
+
+export interface PaymentMilestoneRow {
+  id: string;
+  contract_id: string;
+  sequence: number;
+  type: string;
+  label: string | null;
+  description: string | null;
+  amount_sar: number | null;
+  amount_percentage: number | null;
+  due_date: string | null;
+  status: string;
+  readiness_percentage: number;
+  claimable: boolean;
+  paid: boolean;
+  preconditions: Precondition[];
+  missing_preconditions: string[];
+  clause_ref: string | null;
+  quote: string | null;
+  page: number | null;
+  confidence: number | null;
+  verified: boolean;
+  char_start: number | null;
+  char_end: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PaymentSummary {
+  total: number;
+  claimable_sar: number;
+  blocked_sar: number;
+  overdue_sar: number;
+  paid_sar: number;
+  needs_review_count: number;
+}
+
+export interface MilestonesResponse {
+  milestones: PaymentMilestoneRow[];
+  summary: PaymentSummary;
+}
+
+export interface FlowdownClauseSource {
+  clause_id: string;
+  clause_ref: string | null;
+  quote: string | null;
+  page: number | null;
+  char_start: number | null;
+  char_end: number | null;
+}
+
+export interface FlowdownFindingRow {
+  id: string;
+  category: string;
+  status: string;
+  risk_level: string;
+  explanation: string | null;
+  recommendation: string | null;
+  confidence: number | null;
+  main_citation: string | null;
+  sub_citation: string | null;
+  main_source: FlowdownClauseSource | null;
+  sub_source: FlowdownClauseSource | null;
+}
+
+export interface FlowdownSummary {
+  overall_risk_score: number;
+  critical_count: number;
+  missing_count: number;
+  conflict_count: number;
+  coverage_pct: number;
+  total: number;
+}
+
+export interface FlowdownResponse {
+  main: { id: string; title: string | null };
+  sub: { id: string; title: string | null };
+  findings: FlowdownFindingRow[];
+  summary: FlowdownSummary;
+}
+
+export interface FlowdownContractOption {
+  id: string;
+  title: string;
+  contract_category: string | null;
+}
+
+export interface FlowdownContractsList {
+  main: FlowdownContractOption[];
+  sub: FlowdownContractOption[];
+}
