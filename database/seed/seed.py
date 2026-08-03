@@ -54,7 +54,10 @@ def upload(client: httpx.Client, filename: str, ctype: str, parent_id: str | Non
     r = client.post(f"{API}/api/contracts/{cid}/extract", headers=HEADERS, timeout=300)
     r.raise_for_status()
     body = r.json()
-    print(f"  extracted: status={body['status']} counts={body['counts']}")
+    if body.get("supported") is False:
+        print(f"  classification blocked: category={body.get('contract_category')} supported=false")
+    else:
+        print(f"  extracted: status={body.get('status')} counts={body.get('counts')}")
     return cid
 
 
