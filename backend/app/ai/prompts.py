@@ -18,6 +18,8 @@ STRICT RULES — follow every one of them:
 5. Language of descriptions: mirror the contract's language. Arabic contract → Arabic descriptions (e.g. «توريد كامل كميات حديد التسليح خلال ٤٥ يوم عمل»). English contract → English descriptions.
 
 6. Confidence: a number 0..1 per item and per header field. Anything below 0.7 will be flagged for human review — be honest about uncertainty; never inflate confidence to avoid review.
+
+7. notice_periods — capture EVERY clause that creates a time window measured in days within which a party must notify, claim, object, respond, or PAY. This includes: claim/extension notices (إشعار المطالبات), defect notification windows (الإخطار بالعيوب), suspension notices (إشعار تعليق الأعمال), AND payment windows (e.g. «سداد قيمة كل فاتورة خلال ١٥ يوماً من تاريخ استلام الفاتورة» → purpose: سداد الفواتير, days: 15). A clause may appear in both notice_periods and obligations — that is correct, list it in both.
 """
 
 

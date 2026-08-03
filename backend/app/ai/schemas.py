@@ -59,6 +59,13 @@ EXTRACTION_SCHEMA = {
         "warranty_end_raw": _DATE_RAW_NULLABLE,
         "notice_periods": {
             "type": "array",
+            "description": (
+                "EVERY clause creating a time window in days for a party to notify, claim, "
+                "object, respond, or pay. Includes claim/extension notices, defect notification "
+                "windows, suspension notices, AND payment windows (e.g. paying an invoice within "
+                "15 days of receipt). Do not skip payment windows — they belong here AND in "
+                "obligations."
+            ),
             "items": _obj({
                 "purpose": {"type": "string"},
                 "days": {"type": "integer"},
