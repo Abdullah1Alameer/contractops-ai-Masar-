@@ -111,22 +111,6 @@ def flowdown_placeholder(body: FlowdownIn, response: Response):
 
 
 # =====================================================================
-# TODO(F5 — dashboard):
-# Aggregate real numbers: contracts by status, deadlines within 30 days of
-# the demo clock, overdue obligations, claimable milestones total.
-# =====================================================================
-@router.get("/dashboard")
-def dashboard_placeholder(response: Response):
-    _ph(response)
-    return {
-        "contracts": {"total": 2, "ready": 2, "needs_review": 0, "processing": 0, "failed": 0},
-        "deadlines_next_30_days": 3,
-        "overdue_obligations": 1,
-        "claimable_milestones_sar": 3600000,
-    }
-
-
-# =====================================================================
 # REAL implementation — demo clock (trivial, teammates depend on it).
 # =====================================================================
 class TodayIn(BaseModel):

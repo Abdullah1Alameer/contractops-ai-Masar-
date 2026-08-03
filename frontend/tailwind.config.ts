@@ -12,6 +12,13 @@ const config: Config = {
           700: "#136340",
           800: "#0f4d33",
         },
+        // Enterprise dashboard palette (F5) — see lib/chartColors.ts for chart usage.
+        arctic: "#F1F6F4",
+        mint: "#D9E8E2",
+        forsythia: "#FFC801",
+        saffron: "#FF9932",
+        nocturnal: "#114C5A",
+        oceanic: "#172B36",
       },
     },
   },

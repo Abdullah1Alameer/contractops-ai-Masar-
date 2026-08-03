@@ -76,3 +76,22 @@ export interface SourceTarget {
   char_start: number;
   char_end: number;
 }
+
+export type DeadlineSeverity = "info" | "warning" | "critical";
+
+export interface DashboardData {
+  contracts: {
+    total: number;
+    ready: number;
+    needs_review: number;
+    processing: number;
+    failed: number;
+  };
+  deadlines_next_30_days: number;
+  deadlines_by_severity: Record<DeadlineSeverity, number>;
+  overdue_obligations: number;
+  claimable_milestones_sar: number;
+  milestones_by_status: Record<"blocked" | "claimable" | "paid", number>;
+  deadlines_timeline: { month: string; count: number }[];
+  obligations_timeline: { month: string; pending: number; overdue: number; done: number }[];
+}
