@@ -9,3 +9,4 @@ node_modules/
 storage/
 frontend/.env.local
 .DS_Store
+frontend/tsconfig.tsbuildinfo
