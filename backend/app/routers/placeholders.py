@@ -13,8 +13,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Contract, DemoSettings
+from ..models import Contract, DemoSettings, Event
 from ..ai.classifier import FLOWDOWN_ELIGIBLE
+from ..services.deadlines import (
+    build_deadlines_for_contract,
+    deadline_summary,
+    list_deadlines_for_contract,
+)
 
 router = APIRouter(tags=["placeholders"])
 
@@ -24,20 +29,40 @@ def _ph(response: Response):
 
 
 # =====================================================================
-# TODO(F2 — deadlines engine):
-# Read extractions.value_json where field_name='notice_periods' (see
-# docs/README_HANDOFF.md) + contracts.bond_expiry/warranty_end/end_date,
-# generate rows in the `deadlines` table (types: notice_window, bond_expiry,
-# warranty_end, payment, contract_expiry; severity by proximity to the demo
-# clock /api/demo/today). Replace this static JSON with real DB reads.
+# F2 — Time-Bar Guardian (real)
 # =====================================================================
+_READY = frozenset({"ready", "needs_review"})
+
+
+def _require_contract_ready(contract: Contract | None):
+    if contract is None:
+        raise HTTPException(404, detail={"error": "not_found"})
+    if contract.status not in _READY:
+        raise HTTPException(409, detail={"error": "extraction_not_complete", "status": contract.status})
+
+
 @router.get("/contracts/{contract_id}/deadlines")
-def deadlines_placeholder(contract_id: _uuid.UUID, response: Response):
-    _ph(response)
-    return [
-        {"id": "00000000-0000-0000-0000-000000000001", "type": "notice_window", "label": "نافذة إشعار المطالبات (٦٠ يوماً)", "notice_period_days": 60, "deadline_date": "2026-09-15", "severity": "critical", "source_clause_id": None, "triggered_by_event_id": None},
-        {"id": "00000000-0000-0000-0000-000000000002", "type": "bond_expiry", "label": "انتهاء خطاب الضمان البنكي", "notice_period_days": None, "deadline_date": "2026-08-27", "severity": "warning", "source_clause_id": None, "triggered_by_event_id": None},
-    ]
+def get_contract_deadlines(contract_id: _uuid.UUID, db: Session = Depends(get_db)):
+    contract = db.get(Contract, contract_id)
+    _require_contract_ready(contract)
+    try:
+        items = list_deadlines_for_contract(contract_id, db)
+    except ValueError:
+        raise HTTPException(404, detail={"error": "not_found"})
+    return {"deadlines": items, "summary": deadline_summary(items)}
+
+
+@router.post("/contracts/{contract_id}/deadlines/rebuild")
+def rebuild_contract_deadlines(contract_id: _uuid.UUID, db: Session = Depends(get_db)):
+    contract = db.get(Contract, contract_id)
+    _require_contract_ready(contract)
+    try:
+        build_deadlines_for_contract(contract_id, db)
+        db.commit()
+        items = list_deadlines_for_contract(contract_id, db)
+    except ValueError:
+        raise HTTPException(404, detail={"error": "not_found"})
+    return {"deadlines": items, "summary": deadline_summary(items)}
 
 
 # =====================================================================
@@ -80,9 +105,32 @@ class EventIn(BaseModel):
 
 
 @router.post("/contracts/{contract_id}/events", status_code=201)
-def post_event_placeholder(contract_id: _uuid.UUID, body: EventIn, response: Response):
-    _ph(response)
-    return {"id": "00000000-0000-0000-0000-000000000021", "contract_id": str(contract_id), **body.model_dump(mode="json")}
+def post_contract_event(contract_id: _uuid.UUID, body: EventIn, db: Session = Depends(get_db)):
+    contract = db.get(Contract, contract_id)
+    _require_contract_ready(contract)
+    ev = Event(
+        id=_uuid.uuid4(),
+        contract_id=contract_id,
+        type=body.type,
+        description=body.description,
+        event_date=body.event_date,
+    )
+    db.add(ev)
+    db.flush()
+    build_deadlines_for_contract(contract_id, db)
+    db.commit()
+    items = list_deadlines_for_contract(contract_id, db)
+    return {
+        "event": {
+            "id": str(ev.id),
+            "contract_id": str(contract_id),
+            "type": ev.type,
+            "description": ev.description,
+            "event_date": ev.event_date.isoformat(),
+        },
+        "deadlines": items,
+        "summary": deadline_summary(items),
+    }
 
 
 # =====================================================================

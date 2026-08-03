@@ -93,11 +93,20 @@ class Deadline(Base):
     contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=False)
     type = Column(Text)
     label = Column(Text)
+    title = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
     notice_period_days = Column(Integer, nullable=True)
-    deadline_date = Column(Date)
+    deadline_date = Column(Date, nullable=True)
+    source_trigger_date = Column(Date, nullable=True)
     severity = Column(Text)
+    needs_review = Column(Boolean, nullable=False, default=False)
+    review_reason = Column(Text, nullable=True)
+    responsible_party = Column(Text, nullable=True)
+    confidence = Column(Numeric(3, 2), nullable=True)
+    generated = Column(Boolean, nullable=False, default=True)
     source_clause_id = Column(UUID(as_uuid=True), ForeignKey("clauses.id"))
-    triggered_by_event_id = Column(UUID(as_uuid=True), nullable=True)
+    triggered_by_event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class Event(Base):

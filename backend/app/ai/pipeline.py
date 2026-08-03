@@ -216,6 +216,14 @@ def run_extraction(contract_id, db: Session) -> dict:
 
     db.commit()
 
+    try:
+        from ..services.deadlines import build_deadlines_for_contract
+
+        build_deadlines_for_contract(contract.id, db)
+        db.commit()
+    except Exception:
+        db.rollback()
+
     return {
         "status": contract.status,
         "counts": {

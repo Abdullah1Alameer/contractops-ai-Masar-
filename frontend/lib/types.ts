@@ -85,3 +85,42 @@ export interface SourceTarget {
   char_start: number;
   char_end: number;
 }
+
+export interface DeadlineRow {
+  id: string;
+  contract_id: string;
+  type: string;
+  title: string | null;
+  description: string | null;
+  event_date: string | null;
+  deadline_date: string | null;
+  source_trigger_date: string | null;
+  notice_period_days: number | null;
+  days_remaining: number | null;
+  severity: string;
+  status: string;
+  time_barred: boolean;
+  needs_review: boolean;
+  review_reason: string | null;
+  responsible_party: string | null;
+  clause_ref: string | null;
+  quote: string | null;
+  page: number | null;
+  confidence: number | null;
+  verified: boolean;
+  char_start: number | null;
+  char_end: number | null;
+}
+
+export interface DeadlineSummary {
+  total: number;
+  critical: number;
+  within_14_days: number;
+  missed_or_time_barred: number;
+  needs_review: number;
+}
+
+export interface DeadlinesResponse {
+  deadlines: DeadlineRow[];
+  summary: DeadlineSummary;
+}

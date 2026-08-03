@@ -68,3 +68,31 @@ export interface ExtractResult {
   status?: string;
   counts?: Record<string, number>;
 }
+
+export async function fetchDeadlines(contractId: string) {
+  return api<import("./types").DeadlinesResponse>(`/api/contracts/${contractId}/deadlines`);
+}
+
+export async function rebuildDeadlines(contractId: string) {
+  return api<import("./types").DeadlinesResponse>(`/api/contracts/${contractId}/deadlines/rebuild`, {
+    method: "POST",
+  });
+}
+
+export async function getDemoToday() {
+  return api<{ today: string }>("/api/demo/today");
+}
+
+export async function setDemoToday(today: string) {
+  return apiJson<{ today: string }>("/api/demo/today", "POST", { today });
+}
+
+export async function logContractEvent(
+  contractId: string,
+  body: { type: string; description?: string; event_date: string }
+) {
+  return api<import("./types").DeadlinesResponse & { event: Record<string, string> }>(
+    `/api/contracts/${contractId}/events`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+  );
+}

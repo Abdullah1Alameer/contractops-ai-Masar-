@@ -1,7 +1,7 @@
 "use client";
 // F1 money screen. Two panes:
 //  - data pane (first in DOM = RIGHT in RTL): header cards + obligations +
-//    extracted notice periods + F2/F3 placeholder tabs
+//    extracted notice periods + F2 timeline tab + F3 placeholder milestones
 //  - source viewer (LEFT): raw page text with the exact quote highlighted.
 // Every extracted value either opens its highlighted source (verified quote)
 // or shows a "source unverified" badge — never a wrong highlight.
@@ -9,7 +9,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
 import ConfidenceChip from "@/components/ConfidenceChip";
+import DeadlineTimeline from "@/components/DeadlineTimeline";
+import DemoClockControl from "@/components/DemoClockControl";
 import DualDate from "@/components/DualDate";
+import LogEventDialog from "@/components/LogEventDialog";
 import SourceViewer from "@/components/SourceViewer";
 import StatusChip from "@/components/StatusChip";
 import TypeBadge from "@/components/TypeBadge";
@@ -34,17 +37,17 @@ export default function ContractDetailPage() {
 
   const [detail, setDetail] = useState<ContractDetail | null>(null);
   const [obligations, setObligations] = useState<ObligationRow[]>([]);
-  const [deadlines, setDeadlines] = useState<{ data: any[]; placeholder: boolean } | null>(null);
   const [milestones, setMilestones] = useState<{ data: any[]; placeholder: boolean } | null>(null);
   const [target, setTarget] = useState<SourceTarget | null>(null);
   const [tab, setTab] = useState<Tab>("obligations");
   const [error, setError] = useState(false);
+  const [demoToday, setDemoToday] = useState("");
+  const [timelineRefresh, setTimelineRefresh] = useState(0);
 
   const load = useCallback(() => {
     setError(false);
     api<ContractDetail>(`/api/contracts/${id}`).then(setDetail).catch(() => setError(true));
     api<ObligationRow[]>(`/api/contracts/${id}/obligations`).then(setObligations).catch(() => {});
-    apiWithMeta<any[]>(`/api/contracts/${id}/deadlines`).then(setDeadlines).catch(() => {});
     apiWithMeta<any[]>(`/api/contracts/${id}/milestones`).then(setMilestones).catch(() => {});
   }, [id]);
   useEffect(load, [load]);
@@ -264,21 +267,25 @@ export default function ContractDetailPage() {
               )}
 
               {tab === "deadlines" && (
-                <PlaceholderList
-                  meta={deadlines}
-                  note={t("detail.deadlinesWaiting")}
-                  render={(d: any) => (
-                    <li key={d.id} className="flex items-center justify-between rounded-lg border p-3 text-sm">
-                      <span>{d.label}</span>
-                      <span className="flex items-center gap-2">
-                        <DualDate date={d.deadline_date} />
-                        <span className={cn("rounded-full px-2 py-0.5 text-xs", d.severity === "critical" ? "bg-red-100 text-red-700" : d.severity === "warning" ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-600")}>
-                          {t(`deadline.severity.${d.severity}` as TKey)}
-                        </span>
-                      </span>
-                    </li>
+                <div>
+                  <DemoClockControl onChange={setDemoToday} />
+                  {demoToday && (
+                    <>
+                      <LogEventDialog
+                        contractId={id}
+                        demoToday={demoToday}
+                        onLogged={() => setTimelineRefresh((k) => k + 1)}
+                      />
+                      <DeadlineTimeline
+                        contractId={id}
+                        demoToday={demoToday}
+                        contractStatus={detail.status}
+                        refreshKey={timelineRefresh}
+                        onSourceClick={setTarget}
+                      />
+                    </>
                   )}
-                />
+                </div>
               )}
 
               {tab === "milestones" && (
