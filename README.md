@@ -1,5 +1,7 @@
 # ContractOps AI
 
+AI-powered Contract Operations Platform for Saudi Construction & Real Estate Companies.
+
 إدارة عقود الباطن للمقاولات السعودية — hackathon project.
 F0 (أساس عربي RTL) + F1 (الاستخراج الذكي بالمصادر الموثقة) مكتملة؛ F2–F5 placeholders جاهزة للفريق (انظر `docs/README_HANDOFF.md`).
 
