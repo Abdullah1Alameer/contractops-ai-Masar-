@@ -18,6 +18,7 @@ from ..models import Clause, Contract, Extraction, Obligation
 from ..services.dates import parse_date_raw
 from ..services.storage import storage
 from ..services.textextract import build_raw_text, extract_pages
+from .classifier import SUPPORTED_CATEGORIES, category_to_type, classify_contract
 from .client import complete_json
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .schemas import EXTRACTION_SCHEMA
@@ -50,6 +51,32 @@ def run_extraction(contract_id, db: Session) -> dict:
     raw_text, page_starts = build_raw_text(pages)
     contract.raw_text = raw_text
     norm_text = normalize(raw_text)
+
+    # ---- Stage 0: classification (must run before extraction) ----
+    classification = classify_contract(norm_text[:8000])
+    contract.contract_category = classification["contract_category"]
+    contract.supported = classification["supported"]
+    contract.classification_confidence = classification["confidence"]
+    contract.classification_message = classification.get("message")
+    contract.type = category_to_type(classification["contract_category"])
+
+    if not classification["supported"]:
+        # Do not persist unsupported uploads — remove file + row entirely.
+        file_key = contract.file_url
+        category = classification["contract_category"]
+        confidence = classification["confidence"]
+        message = classification.get("message", "This contract type is currently not supported.")
+        db.delete(contract)
+        db.commit()
+        storage.delete(file_key)
+        return {
+            "supported": False,
+            "deleted": True,
+            "contract_category": category,
+            "confidence": confidence,
+            "message": message,
+            "supported_categories": SUPPORTED_CATEGORIES,
+        }
 
     # ---- Stage 2: model ----
     result, n_chunks = _run_model(norm_text, pages)

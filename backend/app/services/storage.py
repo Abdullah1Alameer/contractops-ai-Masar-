@@ -26,5 +26,14 @@ class StorageService:
         with open(os.path.join(self.base_dir, key), "rb") as f:
             return f.read()
 
+    def delete(self, key: str | None) -> None:
+        if not key:
+            return
+        path = os.path.join(self.base_dir, key)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
 
 storage = StorageService()

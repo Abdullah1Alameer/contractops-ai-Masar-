@@ -44,10 +44,27 @@ export async function apiJson<T>(path: string, method: string, body: unknown): P
   });
 }
 
-export async function uploadContract(file: File, type: "main" | "subcontract", parentId?: string) {
+export async function uploadContract(file: File) {
   const form = new FormData();
   form.append("file", file);
-  form.append("type", type);
-  if (parentId) form.append("parent_main_contract_id", parentId);
   return api<{ id: string; status: string }>("/api/contracts", { method: "POST", body: form });
+}
+
+export async function deleteContract(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/contracts/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  if (!res.ok) await parseError(res);
+}
+
+export interface ExtractResult {
+  supported?: boolean;
+  deleted?: boolean;
+  contract_category?: string;
+  confidence?: number;
+  message?: string;
+  supported_categories?: string[];
+  status?: string;
+  counts?: Record<string, number>;
 }

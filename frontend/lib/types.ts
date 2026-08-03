@@ -1,4 +1,6 @@
-export type ContractStatus = "processing" | "ready" | "needs_review" | "failed";
+export type ContractStatus = "processing" | "ready" | "needs_review" | "failed" | "unsupported";
+
+export type ContractType = "main" | "subcontract" | null;
 
 export interface ClauseSource {
   id?: string;
@@ -12,7 +14,10 @@ export interface ClauseSource {
 export interface ContractListItem {
   id: string;
   title: string;
-  type: "main" | "subcontract";
+  type: ContractType;
+  contract_category: string | null;
+  supported: boolean | null;
+  classification_confidence: number | null;
   party_b: string | null;
   value_sar: number | null;
   status: ContractStatus;
@@ -30,7 +35,7 @@ export interface ExtractionRow {
 export interface ContractDetail {
   id: string;
   title: string;
-  type: "main" | "subcontract";
+  type: ContractType;
   parent_main_contract_id: string | null;
   party_a: string | null;
   party_b: string | null;
@@ -44,6 +49,10 @@ export interface ContractDetail {
   language: string | null;
   calendar: string | null;
   status: ContractStatus;
+  contract_category: string | null;
+  supported: boolean | null;
+  classification_confidence: number | null;
+  classification_message: string | null;
   extractions: ExtractionRow[];
 }
 

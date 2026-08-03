@@ -2,9 +2,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import CategoryBadge from "@/components/CategoryBadge";
 import StatusChip from "@/components/StatusChip";
 import TypeBadge from "@/components/TypeBadge";
-import { api } from "@/lib/api";
+import { api, deleteContract } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { ContractListItem } from "@/lib/types";
 import { formatSAR } from "@/lib/utils";
@@ -13,12 +14,27 @@ export default function ContractsPage() {
   const { t, lang } = useI18n();
   const [rows, setRows] = useState<ContractListItem[] | null>(null);
   const [error, setError] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = () => {
     setError(false);
     api<ContractListItem[]>("/api/contracts").then(setRows).catch(() => setError(true));
   };
   useEffect(load, []);
+
+  const onDelete = async (id: string) => {
+    if (deletingId) return;
+    if (!window.confirm(t("list.deleteConfirm"))) return;
+    setDeletingId(id);
+    try {
+      await deleteContract(id);
+      setRows((prev) => prev?.filter((r) => r.id !== id) ?? null);
+    } catch {
+      alert(t("common.error"));
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div>
@@ -51,6 +67,7 @@ export default function ContractsPage() {
                     {t(k)}
                   </th>
                 ))}
+                <th className="px-4 py-3 text-start font-medium sr-only">{t("list.delete")}</th>
               </tr>
             </thead>
             <tbody>
@@ -62,7 +79,16 @@ export default function ContractsPage() {
                     </Link>
                   </td>
                   <td className="px-4 py-3">
-                    <TypeBadge type={c.type} />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {c.status === "unsupported" || c.supported === false ? (
+                        <StatusChip status="unsupported" />
+                      ) : (
+                        <>
+                          {c.type && <TypeBadge type={c.type} />}
+                          <CategoryBadge category={c.contract_category} />
+                        </>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-700">{c.party_b ?? "—"}</td>
                   <td className="px-4 py-3">{formatSAR(c.value_sar, lang)}</td>
@@ -76,6 +102,17 @@ export default function ContractsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <StatusChip status={c.status} />
+                  </td>
+                  <td className="px-4 py-3 text-end">
+                    <button
+                      onClick={() => onDelete(c.id)}
+                      disabled={deletingId === c.id}
+                      title={t("list.delete")}
+                      aria-label={t("list.delete")}
+                      className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {deletingId === c.id ? t("list.deleting") : t("list.delete")}
+                    </button>
                   </td>
                 </tr>
               ))}

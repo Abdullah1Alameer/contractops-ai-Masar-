@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { api, ApiError, uploadContract } from "@/lib/api";
+import UnsupportedContractWarning from "@/components/UnsupportedContractWarning";
+import { api, ApiError, uploadContract, type ExtractResult } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
-import type { ContractListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Phase = "idle" | "uploading" | "extracting";
@@ -17,26 +17,21 @@ const ERROR_KEYS: Record<string, TKey> = {
   ai_failed: "upload.err.ai",
 };
 
+type Blocked = { category: string; confidence?: number; message?: string };
+
 export default function UploadPage() {
   const { t } = useI18n();
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [type, setType] = useState<"main" | "subcontract">("main");
-  const [parentId, setParentId] = useState<string>("");
-  const [mains, setMains] = useState<ContractListItem[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [errorKey, setErrorKey] = useState<TKey | null>(null);
   const [dragging, setDragging] = useState(false);
-
-  useEffect(() => {
-    api<ContractListItem[]>("/api/contracts")
-      .then((all) => setMains(all.filter((c) => c.type === "main")))
-      .catch(() => {});
-  }, []);
+  const [blocked, setBlocked] = useState<Blocked | null>(null);
 
   const pick = (f: File | undefined | null) => {
     setErrorKey(null);
+    setBlocked(null);
     if (!f) return;
     if (!/\.(pdf|docx)$/i.test(f.name)) return setErrorKey("upload.err.type");
     if (f.size > 20 * 1024 * 1024) return setErrorKey("upload.err.size");
@@ -46,11 +41,22 @@ export default function UploadPage() {
   const submit = async () => {
     if (!file || phase !== "idle") return;
     setErrorKey(null);
+    setBlocked(null);
     try {
       setPhase("uploading");
-      const { id } = await uploadContract(file, type, type === "subcontract" && parentId ? parentId : undefined);
+      const { id } = await uploadContract(file);
       setPhase("extracting");
-      await api(`/api/contracts/${id}/extract`, { method: "POST" });
+      const result = await api<ExtractResult>(`/api/contracts/${id}/extract`, { method: "POST" });
+      if (result.supported === false) {
+        setPhase("idle");
+        setBlocked({
+          category: result.contract_category ?? "Unknown",
+          confidence: result.confidence,
+          message: result.message,
+        });
+        setFile(null);
+        return;
+      }
       router.push(`/contracts/${id}`);
     } catch (e) {
       setPhase("idle");
@@ -58,6 +64,26 @@ export default function UploadPage() {
       setErrorKey(ERROR_KEYS[code] ?? "common.error");
     }
   };
+
+  if (blocked) {
+    return (
+      <div className="space-y-4">
+        <UnsupportedContractWarning
+          category={blocked.category}
+          message={blocked.message}
+          confidence={blocked.confidence}
+        />
+        <div className="mx-auto max-w-2xl">
+          <button
+            onClick={() => setBlocked(null)}
+            className="rounded-lg border px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            {t("upload.tryAnother")}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -91,30 +117,6 @@ export default function UploadPage() {
       </div>
 
       <div className="mt-6 grid gap-4 rounded-xl border bg-white p-6">
-        <label className="grid gap-1 text-sm font-medium text-gray-700">
-          {t("upload.type")}
-          <select
-            className="rounded-md border px-3 py-2"
-            value={type}
-            onChange={(e) => setType(e.target.value as any)}
-          >
-            <option value="main">{t("type.main")}</option>
-            <option value="subcontract">{t("type.subcontract")}</option>
-          </select>
-        </label>
-        {type === "subcontract" && (
-          <label className="grid gap-1 text-sm font-medium text-gray-700">
-            {t("upload.parent")}
-            <select className="rounded-md border px-3 py-2" value={parentId} onChange={(e) => setParentId(e.target.value)}>
-              <option value="">{t("upload.parentNone")}</option>
-              {mains.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <button
           onClick={submit}
           disabled={!file || phase !== "idle"}

@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -24,7 +25,11 @@ class Contract(Base):
     __tablename__ = "contracts"
     id = _uuid_pk()
     title = Column(Text)
-    type = Column(Text)  # 'main' | 'subcontract'
+    type = Column(Text, nullable=True)  # 'main' | 'subcontract' | NULL (derived from category)
+    contract_category = Column(Text, nullable=True)
+    supported = Column(Boolean, nullable=True)
+    classification_confidence = Column(Numeric(3, 2), nullable=True)
+    classification_message = Column(Text, nullable=True)
     parent_main_contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id"), nullable=True)
     party_a = Column(Text)
     party_b = Column(Text)

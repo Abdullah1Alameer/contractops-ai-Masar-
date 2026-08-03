@@ -13,6 +13,7 @@ import DualDate from "@/components/DualDate";
 import SourceViewer from "@/components/SourceViewer";
 import StatusChip from "@/components/StatusChip";
 import TypeBadge from "@/components/TypeBadge";
+import UnsupportedContractWarning from "@/components/UnsupportedContractWarning";
 import { api, apiJson, apiWithMeta } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type {
@@ -76,6 +77,16 @@ export default function ContractDetailPage() {
       </div>
     );
   if (!detail) return <p className="p-8 text-center text-gray-400">{t("common.loading")}</p>;
+
+  if (detail.supported === false) {
+    return (
+      <UnsupportedContractWarning
+        category={detail.contract_category ?? "Unknown"}
+        message={detail.classification_message ?? undefined}
+        confidence={detail.classification_confidence ?? undefined}
+      />
+    );
+  }
 
   const SourceButton = ({ src }: { src: ClauseSource | null }) =>
     src ? (

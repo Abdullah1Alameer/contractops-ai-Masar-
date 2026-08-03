@@ -8,12 +8,13 @@ Each block below documents exactly what the owning teammate must implement.
 import uuid as _uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import DemoSettings
+from ..models import Contract, DemoSettings
+from ..ai.classifier import FLOWDOWN_ELIGIBLE
 
 router = APIRouter(tags=["placeholders"])
 
@@ -98,8 +99,22 @@ class FlowdownIn(BaseModel):
 
 
 @router.post("/flowdown")
-def flowdown_placeholder(body: FlowdownIn, response: Response):
+def flowdown_placeholder(body: FlowdownIn, response: Response, db: Session = Depends(get_db)):
     _ph(response)
+    main = db.get(Contract, body.main_contract_id)
+    sub = db.get(Contract, body.subcontract_id)
+    if main is None or sub is None:
+        raise HTTPException(404, detail={"error": "not_found"})
+    for c, label in ((main, "main_contract_id"), (sub, "subcontract_id")):
+        if c.contract_category not in FLOWDOWN_ELIGIBLE:
+            raise HTTPException(
+                422,
+                detail={
+                    "error": "flowdown_ineligible_category",
+                    "field": label,
+                    "contract_category": c.contract_category,
+                },
+            )
     return {
         "main_contract_id": str(body.main_contract_id),
         "subcontract_id": str(body.subcontract_id),

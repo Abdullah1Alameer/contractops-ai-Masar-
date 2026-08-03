@@ -43,11 +43,11 @@ def _clause_dict(c: Clause | None):
 @router.post("", status_code=201)
 async def upload_contract(
     file: UploadFile,
-    type: str = Form(...),
+    type: str | None = Form(default=None),
     parent_main_contract_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    if type not in ("main", "subcontract"):
+    if type is not None and type not in ("main", "subcontract"):
         raise HTTPException(422, detail={"error": "invalid_contract_type"})
     data = await file.read()
     if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
@@ -120,6 +120,9 @@ def list_contracts(db: Session = Depends(get_db)):
             "id": str(c.id),
             "title": c.title,
             "type": c.type,
+            "contract_category": c.contract_category,
+            "supported": c.supported,
+            "classification_confidence": _num(c.classification_confidence),
             "party_b": c.party_b,
             "value_sar": _num(c.value_sar),
             "status": c.status,
@@ -160,6 +163,10 @@ def get_contract(contract_id: _uuid.UUID, db: Session = Depends(get_db)):
         "language": c.language,
         "calendar": c.calendar,
         "status": c.status,
+        "contract_category": c.contract_category,
+        "supported": c.supported,
+        "classification_confidence": _num(c.classification_confidence),
+        "classification_message": c.classification_message,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "extractions": extractions,
     }
@@ -196,6 +203,22 @@ def get_obligations(contract_id: _uuid.UUID, db: Session = Depends(get_db)):
             "confidence": conf_by_clause.get(str(o.source_clause_id)) if o.source_clause_id else None,
         })
     return out
+
+
+@router.delete("/{contract_id}", status_code=204)
+def delete_contract(contract_id: _uuid.UUID, db: Session = Depends(get_db)):
+    c = db.get(Contract, contract_id)
+    if c is None:
+        raise HTTPException(404, detail={"error": "not_found"})
+    # Nullify any subcontracts that pointed at this main contract (no ON DELETE clause on the FK).
+    db.query(Contract).filter(Contract.parent_main_contract_id == c.id).update(
+        {Contract.parent_main_contract_id: None}
+    )
+    file_key = c.file_url
+    db.delete(c)  # clauses/extractions/obligations/deadlines/... cascade via FK
+    db.commit()
+    storage.delete(file_key)
+    return None
 
 
 @router.get("/{contract_id}/raw")

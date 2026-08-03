@@ -8,6 +8,7 @@ const styles: Record<ContractStatus, string> = {
   ready: "bg-emerald-100 text-emerald-800",
   needs_review: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-800",
+  unsupported: "bg-red-100 text-red-800",
 };
 
 export default function StatusChip({ status }: { status: ContractStatus }) {

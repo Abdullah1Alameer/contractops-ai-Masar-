@@ -2,8 +2,9 @@
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-export default function TypeBadge({ type }: { type: "main" | "subcontract" }) {
+export default function TypeBadge({ type }: { type: "main" | "subcontract" | null }) {
   const { t } = useI18n();
+  if (!type) return null;
   return (
     <span
       className={cn(
