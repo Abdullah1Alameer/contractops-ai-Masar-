@@ -190,6 +190,10 @@ export interface FlowdownFindingRow {
   risk_level: string;
   explanation: string | null;
   recommendation: string | null;
+  explanation_ar?: string | null;
+  explanation_en?: string | null;
+  recommendation_ar?: string | null;
+  recommendation_en?: string | null;
   confidence: number | null;
   main_citation: string | null;
   sub_citation: string | null;

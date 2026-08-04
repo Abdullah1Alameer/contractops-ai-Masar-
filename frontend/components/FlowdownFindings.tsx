@@ -3,8 +3,16 @@ import ConfidenceChip from "@/components/ConfidenceChip";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import EmptyState from "@/components/ui/EmptyState";
-import { useI18n, type TKey } from "@/lib/i18n";
+import { useI18n, type Lang, type TKey } from "@/lib/i18n";
 import type { FlowdownFindingRow, SourceTarget } from "@/lib/types";
+
+function pickLang(row: FlowdownFindingRow, field: "recommendation" | "explanation", lang: Lang): string {
+  const ar = (row as any)[`${field}_ar`] as string | null | undefined;
+  const en = (row as any)[`${field}_en`] as string | null | undefined;
+  const legacy = row[field];
+  if (lang === "ar") return (ar || en || legacy || "").trim();
+  return (en || ar || legacy || "").trim();
+}
 
 function catKey(c: string): TKey {
   return `flowdown.category.${c}` as TKey;
@@ -45,7 +53,7 @@ export default function FlowdownFindings({
   onViewMain: (t: SourceTarget) => void;
   onViewSub: (t: SourceTarget) => void;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
 
   if (findings.length === 0) {
     return <EmptyState title={t("empty.flowdown")} description={t("flowdown.empty")} />;
@@ -73,7 +81,7 @@ export default function FlowdownFindings({
           {findings.map((f) => {
             const mainT = toTarget(f.main_source);
             const subT = toTarget(f.sub_source);
-            const rec = f.recommendation || f.explanation || "—";
+            const rec = pickLang(f, "recommendation", lang) || pickLang(f, "explanation", lang) || "—";
             return (
               <tr key={f.id} className="border-t align-top motion-safe:transition-colors hover:bg-muted-50/80">
                 <td className="px-4 py-3.5 font-bold text-gray-900">{t(catKey(f.category))}</td>
@@ -83,8 +91,8 @@ export default function FlowdownFindings({
                 <td className="px-4 py-3.5">
                   <Badge tone={riskTone(f.risk_level)}>{t(riskKey(f.risk_level))}</Badge>
                 </td>
-                <td className="max-w-[36ch] px-4 py-3.5 text-gray-700" title={rec}>
-                  <span className="line-clamp-2">{rec}</span>
+                <td className="min-w-[24ch] max-w-[48ch] px-4 py-3.5 text-gray-700">
+                  <span className="block whitespace-normal break-words leading-relaxed">{rec}</span>
                 </td>
                 <td className="px-4 py-3.5">
                   {f.confidence != null ? <ConfidenceChip confidence={f.confidence} /> : "—"}

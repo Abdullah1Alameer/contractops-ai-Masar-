@@ -247,12 +247,25 @@ def validate_ai_findings(
             sub_id = None
         conf = float(item.get("confidence") or 0)
         conf = max(0.0, min(1.0, conf))
+        exp_ar = (item.get("explanation_ar") or "").strip()
+        exp_en = (item.get("explanation_en") or item.get("explanation") or "").strip()
+        rec_ar = (item.get("recommendation_ar") or "").strip()
+        rec_en = (item.get("recommendation_en") or item.get("recommendation") or "").strip()
+        # Backfill missing side from the other so UI never shows an empty cell
+        exp_ar = exp_ar or exp_en
+        exp_en = exp_en or exp_ar
+        rec_ar = rec_ar or rec_en
+        rec_en = rec_en or rec_ar
         normalized = {
             "category": cat,
             "status": _coerce_status(item.get("status")),
             "risk_level": _coerce_risk(item.get("risk_level")),
-            "explanation": item.get("explanation") or "",
-            "recommendation": item.get("recommendation") or "",
+            "explanation": exp_en or exp_ar,
+            "recommendation": rec_en or rec_ar,
+            "explanation_ar": exp_ar,
+            "explanation_en": exp_en,
+            "recommendation_ar": rec_ar,
+            "recommendation_en": rec_en,
             "main_clause_id": str(main_id) if main_id else None,
             "sub_clause_id": str(sub_id) if sub_id else None,
             "main_citation": item.get("main_citation"),
@@ -276,6 +289,10 @@ def validate_ai_findings(
                     "risk_level": "informational",
                     "explanation": "",
                     "recommendation": "",
+                    "explanation_ar": "",
+                    "explanation_en": "",
+                    "recommendation_ar": "",
+                    "recommendation_en": "",
                     "main_clause_id": None,
                     "sub_clause_id": None,
                     "main_citation": None,
@@ -310,6 +327,10 @@ def validate_and_persist(
             sub_clause_id=_parse_uuid(f.get("sub_clause_id")),
             explanation=f.get("explanation"),
             recommendation=f.get("recommendation"),
+            explanation_ar=f.get("explanation_ar"),
+            explanation_en=f.get("explanation_en"),
+            recommendation_ar=f.get("recommendation_ar"),
+            recommendation_en=f.get("recommendation_en"),
             main_citation=f.get("main_citation"),
             sub_citation=f.get("sub_citation"),
             risk_note=f.get("explanation"),
@@ -377,6 +398,10 @@ def serialize_finding(
         "risk_level": row.severity,
         "explanation": row.explanation,
         "recommendation": row.recommendation,
+        "explanation_ar": row.explanation_ar,
+        "explanation_en": row.explanation_en,
+        "recommendation_ar": row.recommendation_ar,
+        "recommendation_en": row.recommendation_en,
         "confidence": float(row.confidence) if row.confidence is not None else None,
         "main_citation": row.main_citation,
         "sub_citation": row.sub_citation,
