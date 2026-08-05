@@ -207,11 +207,15 @@ def send_email(
     message.add_alternative(html_body, subtype="html")
 
     factory = smtp_factory or (smtplib.SMTP_SSL if configuration.use_ssl else smtplib.SMTP)
-    tls_context = ssl.create_default_context()
-    connection_options = {"timeout": configuration.timeout_seconds}
-    if configuration.use_ssl:
-        connection_options["context"] = tls_context
     try:
+        tls_context = (
+            ssl.create_default_context()
+            if configuration.use_tls or configuration.use_ssl
+            else None
+        )
+        connection_options = {"timeout": configuration.timeout_seconds}
+        if configuration.use_ssl:
+            connection_options["context"] = tls_context
         client = factory(
             configuration.host,
             configuration.port,

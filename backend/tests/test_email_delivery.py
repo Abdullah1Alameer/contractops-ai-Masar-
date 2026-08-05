@@ -179,6 +179,54 @@ def test_timeout_must_be_positive_and_bounded(monkeypatch, valid_smtp_env, timeo
     assert exc_info.value.code == "smtp_timeout_invalid"
 
 
+def test_plaintext_smtp_does_not_create_tls_context(monkeypatch, valid_smtp_env):
+    monkeypatch.setenv("SMTP_USE_TLS", "false")
+    monkeypatch.setenv("SMTP_USE_SSL", "false")
+
+    def unexpected_tls_context():
+        raise AssertionError("plaintext SMTP must not create a TLS context")
+
+    monkeypatch.setattr(email_delivery.ssl, "create_default_context", unexpected_tls_context)
+
+    result = send_email(
+        recipient="reviewer@example.test",
+        subject="Contract review requested",
+        text_body="Open the secure review link.",
+        html_body="<p>Open the secure review link.</p>",
+        smtp_factory=RecordingSMTP,
+    )
+
+    assert result.status == "sent"
+    assert result.safe_error_code is None
+
+
+@pytest.mark.parametrize(
+    ("use_tls", "use_ssl"),
+    [("true", "false"), ("false", "true")],
+)
+def test_tls_context_creation_failure_maps_safely(monkeypatch, valid_smtp_env, use_tls, use_ssl):
+    monkeypatch.setenv("SMTP_USE_TLS", use_tls)
+    monkeypatch.setenv("SMTP_USE_SSL", use_ssl)
+
+    def fail_tls_context():
+        raise RuntimeError("provider-specific TLS setup failure")
+
+    monkeypatch.setattr(email_delivery.ssl, "create_default_context", fail_tls_context)
+
+    result = send_email(
+        recipient="reviewer@example.test",
+        subject="Contract review requested",
+        text_body="Open the secure review link.",
+        html_body="<p>Open the secure review link.</p>",
+        smtp_factory=RecordingSMTP,
+    )
+
+    assert result.status == "failed"
+    assert result.provider_message_id is None
+    assert result.safe_error_code == "smtp_connection_failed"
+    assert result.sent_at is None
+
+
 def test_smtp_ssl_receives_default_tls_context(monkeypatch, valid_smtp_env):
     monkeypatch.setenv("SMTP_USE_TLS", "false")
     monkeypatch.setenv("SMTP_USE_SSL", "true")
