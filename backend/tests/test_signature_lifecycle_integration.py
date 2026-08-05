@@ -17,6 +17,7 @@ from app.models import (
     OutboundMessage,
     SignatureRequest,
     SignatureSigner,
+    SignatureEvent,
 )
 from app.services import signature as signature_service
 from app.services.email_delivery import EmailDeliveryResult
@@ -269,6 +270,18 @@ def test_ordered_signing_persists_partial_then_signed_without_auto_activation(
     assert request.signed_file_url and request.certificate_file_url
     assert db.get(Contract, contract.id).stage == "signed"
     assert db.get(ContractVersion, version.id).status == "signed"
+    raw_tokens = {first_token, second_token}
+    event_payloads = [
+        str(row.event_metadata)
+        for row in db.query(ActivityEvent).filter_by(contract_id=contract.id).all()
+    ] + [
+        str(row.event_metadata)
+        for row in db.query(SignatureEvent).filter_by(signature_request_id=request.id).all()
+    ]
+    outbound_rows = db.query(OutboundMessage).filter_by(signature_request_id=request.id).all()
+    for raw_token in raw_tokens:
+        assert all(raw_token not in payload for payload in event_payloads)
+        assert all(raw_token not in str(row.__dict__) for row in outbound_rows)
 
 
 def test_duplicate_out_of_order_and_stale_actions_do_not_mutate(signature_db):
@@ -387,6 +400,28 @@ def test_open_is_locked_current_and_emits_viewed_transition(signature_db):
     assert request.status == "viewed"
     assert signer.status == "opened"
     assert "signature_viewed" in [event.event_type for event in _events(db, contract.id)]
+
+
+def test_second_signer_opens_after_partial_signature_once(signature_db):
+    db, create_contract = signature_db
+    contract, _ = create_contract()
+    client = TestClient(app)
+    created = _create(client, contract.id)
+    _send(client, created["request"]["id"])
+    assert _sign(client, created["signer_links"][0]["token"], "Signer One").status_code == 200
+
+    first = client.post(f"/api/public/sign/{created['signer_links'][1]['token']}/open")
+    second = client.post(f"/api/public/sign/{created['signer_links'][1]['token']}/open")
+
+    assert first.status_code == second.status_code == 200
+    db.expire_all()
+    request = db.get(SignatureRequest, created["request"]["id"])
+    signer = db.query(SignatureSigner).filter_by(signature_request_id=request.id, signer_order=2).one()
+    assert request.status == "partially_signed"
+    assert signer.status == "opened" and signer.opened_at is not None
+    event_names = [event.event_type for event in _events(db, contract.id)]
+    assert event_names.count("signature_viewed") == 1
+    assert event_names.count("signature_link_opened") == 1
 
 
 def test_expiry_closes_request_and_returns_stage_once(signature_db):

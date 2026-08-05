@@ -44,6 +44,7 @@ export default function SignaturePanel({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lastLink, setLastLink] = useState<string | null>(null);
+  const [activated, setActivated] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -119,12 +120,14 @@ export default function SignaturePanel({
             size="sm"
             onClick={async () => {
               if (!req) return;
-              const reason = window.prompt(t("signature.cancel"));
+              const reason = window.prompt(t("signature.cancelReason"));
               if (!reason?.trim()) return;
               setBusy(true);
               try {
                 await cancelSignatureRequest(req.id, reason.trim());
                 load();
+              } catch {
+                toast.error(t("common.error"));
               } finally {
                 setBusy(false);
               }
@@ -135,24 +138,28 @@ export default function SignaturePanel({
         )}
         {req?.status === "completed" && (
           <>
-            <Button
+            {!activated && <Button
               variant="primary"
               size="sm"
               onClick={async () => {
-                const reason = window.prompt(t("signature.title"));
-                const evidence = reason ? window.prompt(t("signature.title")) : null;
+                const reason = window.prompt(t("signature.activationReason"));
+                const evidence = reason ? window.prompt(t("signature.activationEvidence")) : null;
                 if (!reason?.trim() || !evidence?.trim()) return;
                 setBusy(true);
                 try {
                   await activateSignatureRequest(req.id, reason.trim(), evidence.trim());
+                  setActivated(true);
                   load();
+                } catch {
+                  toast.error(t("common.error"));
                 } finally {
                   setBusy(false);
                 }
               }}
             >
-              Activate
+              {t("signature.activate")}
             </Button>
+            }
             <Button
               variant="secondary"
               size="sm"

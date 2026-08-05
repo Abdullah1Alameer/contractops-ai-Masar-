@@ -330,6 +330,9 @@ def create_request(
             _raise(409, "version_not_approved")
         if not _active_approved_workflow(contract.id, version.id, db):
             _raise(409, "approval_not_complete")
+        from .approvals import unresolved_negotiations
+        if unresolved_negotiations(contract.id, db):
+            _raise(409, "unresolved_negotiations")
         if get_active_request(contract_id, db):
             _raise(409, "active_request_exists")
     except Exception:
@@ -570,6 +573,8 @@ def open_signer(raw_token: str, db: Session, *, ip: str | None, user_agent: str 
             log_sig_event(db, req.id, "signer_opened", signer_id=signer.id, actor=signer.email,
                           metadata={"ip_present": bool(ip)})
             _commit(db, req, signer)
+        else:
+            db.rollback()
     except Exception:
         db.rollback()
         raise
@@ -893,7 +898,13 @@ def get_contract_signature_bundle(contract_id, db: Session) -> dict:
 
 
 def _can_create_request_readonly(contract: Contract | None, db: Session) -> bool:
-    if contract is None or normalize_stage(contract.stage) != ContractStage.READY_TO_SIGN:
+    if contract is None:
+        return False
+    try:
+        stage = normalize_stage(contract.stage)
+    except Exception:
+        return False
+    if stage != ContractStage.READY_TO_SIGN:
         return False
     from .versions import current_version
     version = current_version(contract.id, db)

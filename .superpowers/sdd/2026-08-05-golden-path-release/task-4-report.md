@@ -152,3 +152,35 @@ npm test
 - Existing skipped signature unit tests are legacy mock-only tests superseded by
   persisted integration coverage; they remain explicitly marked while the canonical
   behavior is exercised through real PostgreSQL/API paths.
+
+## Fix round 2
+
+- Added the canonical `partially_signed + signature_viewed → partially_signed` rule
+  and proved signer two can open once after signer one signs, with no duplicate audit.
+- Removed obsolete skipped mock-only signature tests; the Task 4 signature suite now
+  has no skipped tests.
+- Added raw-token persistence assertions across activity/signature event metadata and
+  outbound records after the full signing journey.
+- Creation now blocks unresolved negotiations; read-only eligibility returns false for
+  unknown stages instead of raising.
+- UI cancellation and activation now use bilingual prompts, surface failures through a
+  toast, require reason/evidence, and hide activation after a successful action.
+
+### TDD evidence
+
+RED:
+
+```text
+pytest tests/test_signature_lifecycle_integration.py::test_second_signer_opens_after_partial_signature_once -q
+FAILED: expected 200, received 409
+```
+
+GREEN:
+
+```text
+pytest tests/test_signature_lifecycle_integration.py tests/test_signature.py tests/test_lifecycle.py tests/test_outbound_messages.py -q
+67 passed, 7 warnings
+
+npm test && npx tsc --noEmit
+20 frontend tests passed; TypeScript passed
+```
