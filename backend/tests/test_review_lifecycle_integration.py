@@ -24,6 +24,11 @@ AUTH = {
 }
 
 
+@pytest.fixture(autouse=True)
+def portal_token_secret(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "review-integration-secret")
+
+
 @pytest.fixture
 def review_db():
     db = SessionLocal()
@@ -110,8 +115,16 @@ def test_create_review_transitions_and_persists_both_events(review_db):
 
     db.refresh(contract)
     request = db.get(ReviewRequest, payload["request"]["id"])
+    public_token = payload["request"]["token"]
+    expected_link = f"http://localhost:3000/review/{public_token}"
 
     assert request is not None
+    assert request.token is None
+    assert request.token_hash == review_service.hash_token(public_token)
+    assert payload["review_link"] == expected_link
+    assert payload["request"]["review_link"] == expected_link
+    assert expected_link in payload["email"]["body"]
+    assert "/review/None" not in str(payload)
     assert request.status == "sent"
     assert request.version_id == version.id
     assert contract.stage == "client_review"
@@ -337,9 +350,10 @@ def test_expiry_transitions_current_review_once(review_db):
     request.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     db.commit()
     client = TestClient(app)
+    public_token = sent["request"]["token"]
 
-    first = client.get(f"/api/review/{request.token}")
-    second = client.get(f"/api/review/{request.token}")
+    first = client.get(f"/api/review/{public_token}")
+    second = client.get(f"/api/review/{public_token}")
 
     assert first.status_code == 200
     assert first.json()["status"] == "expired"

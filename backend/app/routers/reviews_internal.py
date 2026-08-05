@@ -15,6 +15,7 @@ from ..services.reviews import (
     cancel_review,
     create_review_request,
     list_reviews_for_contract,
+    public_token_for_request,
     review_link,
     reviews_dashboard_summary,
     serialize_review_request,
@@ -67,7 +68,7 @@ def send_for_review(
     except (ReviewError, LifecycleError) as error:
         _review_http_error(error)
 
-    link = review_link(req.token)
+    link = review_link(public_token_for_request(req))
     email = build_email_template(req, contract, link)
     return {
         "review_link": link,

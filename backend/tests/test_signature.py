@@ -50,6 +50,51 @@ def test_signer_token_is_reproducible_and_stored_as_hash(monkeypatch):
     assert material.public_token != material.nonce
 
 
+def test_resend_legacy_signer_upgrades_once_then_reuses_token(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "test-portal-secret")
+    request_id = uuid.uuid4()
+    signer_id = uuid.uuid4()
+    contract_id = uuid.uuid4()
+    request = SimpleNamespace(
+        id=request_id,
+        contract_id=contract_id,
+        subject="Sign",
+        message="Please sign",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=5),
+    )
+    signer = SimpleNamespace(
+        id=signer_id,
+        signature_request_id=request_id,
+        token_nonce=None,
+        token_hash=sig_svc.hash_token("unrecoverable-legacy-token"),
+        name="Legacy Signer",
+        email="legacy@example.com",
+    )
+    contract = SimpleNamespace(id=contract_id, title="Legacy contract")
+    db = MagicMock()
+
+    def get_row(model, row_id):
+        if model.__name__ == "SignatureSigner" and row_id == signer_id:
+            return signer
+        if model.__name__ == "Contract" and row_id == contract_id:
+            return contract
+        return None
+
+    db.get.side_effect = get_row
+    with patch.object(sig_svc, "get_request_by_id", return_value=request):
+        first = sig_svc.resend_signer(request_id, signer_id, db)
+        upgraded_nonce = signer.token_nonce
+        upgraded_hash = signer.token_hash
+        second = sig_svc.resend_signer(request_id, signer_id, db)
+
+    assert upgraded_nonce
+    assert first["token"] == second["token"]
+    assert first["signer_link"] == second["signer_link"]
+    assert signer.token_nonce == upgraded_nonce
+    assert signer.token_hash == upgraded_hash == sig_svc.hash_token(first["token"])
+    assert first["token"] != "unrecoverable-legacy-token"
+
+
 @patch("app.services.signature.storage")
 @patch("app.services.signature.get_active_request")
 @patch("app.services.signature.transition_stage")
