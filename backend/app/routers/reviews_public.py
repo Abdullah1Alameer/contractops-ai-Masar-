@@ -1,5 +1,5 @@
 """Public review portal — token auth only, no bearer token."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -11,9 +11,11 @@ from ..services.reviews import (
     add_comment,
     build_public_payload,
     get_request_by_token,
+    hash_token,
     record_decision,
     serialize_review_request,
 )
+from ..services.rate_limit import check_rate_limit
 
 router = APIRouter(tags=["review-public"])
 
@@ -30,6 +32,13 @@ class CommentBody(BaseModel):
     comment: str = Field(min_length=1, max_length=4000)
     clause_ref: str | None = None
     page: int | None = None
+
+
+def _rate(request: Request, token: str) -> None:
+    ip = request.client.host if request.client else "unknown"
+    token_digest = hash_token(token)
+    if not check_rate_limit(f"review:{ip}:{token_digest}"):
+        raise HTTPException(429, detail={"error": "rate_limited"})
 
 
 def _load(token: str, db: Session):
@@ -62,7 +71,8 @@ def _decision_result(req, db: Session) -> dict:
 
 
 @router.get("/review/{token}")
-def get_review(token: str, db: Session = Depends(get_db)):
+def get_review(token: str, request: Request, db: Session = Depends(get_db)):
+    _rate(request, token)
     req = _load(token, db)
     try:
         return build_public_payload(req, db)
@@ -71,7 +81,8 @@ def get_review(token: str, db: Session = Depends(get_db)):
 
 
 @router.post("/review/{token}/approve")
-def approve_review(token: str, db: Session = Depends(get_db)):
+def approve_review(token: str, request: Request, db: Session = Depends(get_db)):
+    _rate(request, token)
     req = _load(token, db)
     try:
         record_decision(req, db, "approve", actor="client")
@@ -81,7 +92,13 @@ def approve_review(token: str, db: Session = Depends(get_db)):
 
 
 @router.post("/review/{token}/reject")
-def reject_review(token: str, body: RejectBody, db: Session = Depends(get_db)):
+def reject_review(
+    token: str,
+    body: RejectBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _rate(request, token)
     req = _load(token, db)
     try:
         record_decision(req, db, "reject", body.reason, actor="client")
@@ -91,7 +108,13 @@ def reject_review(token: str, body: RejectBody, db: Session = Depends(get_db)):
 
 
 @router.post("/review/{token}/request-changes")
-def request_changes(token: str, body: RequestChangesBody, db: Session = Depends(get_db)):
+def request_changes(
+    token: str,
+    body: RequestChangesBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _rate(request, token)
     req = _load(token, db)
     try:
         record_decision(req, db, "changes_requested", body.general_comment, actor="client")
@@ -101,7 +124,13 @@ def request_changes(token: str, body: RequestChangesBody, db: Session = Depends(
 
 
 @router.post("/review/{token}/comment")
-def post_comment(token: str, body: CommentBody, db: Session = Depends(get_db)):
+def post_comment(
+    token: str,
+    body: CommentBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _rate(request, token)
     req = _load(token, db)
     try:
         cm = add_comment(req, db, body.comment, body.clause_ref, body.page)

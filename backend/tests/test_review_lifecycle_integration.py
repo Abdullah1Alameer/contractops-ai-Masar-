@@ -1,9 +1,11 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.main import app
@@ -12,10 +14,12 @@ from app.models import (
     Contract,
     ContractVersion,
     Negotiation,
+    OutboundMessage,
     ReviewRequest,
     ReviewResponse,
 )
 from app.services import reviews as review_service
+from app.services.email_delivery import EmailDeliveryResult
 
 
 AUTH = {
@@ -484,3 +488,180 @@ def test_review_serialization_and_workflow_summary_read_back(review_db):
     assert portal["actionable"] is True
     assert portal["is_stale"] is False
     assert "token" not in portal
+
+
+def test_smtp_failure_preserves_review_link_and_records_safe_delivery(
+    review_db, monkeypatch
+):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    delivered_content = {}
+
+    def fail_delivery(**kwargs):
+        delivered_content.update(kwargs)
+        return EmailDeliveryResult("failed", None, "smtp_connection_failed", None)
+
+    monkeypatch.setattr("app.services.outbound_messages.send_email", fail_delivery)
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/review/send",
+        headers=AUTH,
+        json={
+            "recipient_name": "Synthetic Reviewer",
+            "recipient_email": "reviewer@example.invalid",
+            "sender_name": "Synthetic Sender",
+            "sender_email": "sender@example.invalid",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["delivery"]["status"] == "failed"
+    assert payload["delivery"]["safe_error_code"] == "smtp_connection_failed"
+    assert payload["request"]["delivery"]["id"] == payload["delivery"]["id"]
+    assert payload["request"]["delivery_history"] == [payload["delivery"]]
+    db.expire_all()
+    request = db.get(ReviewRequest, payload["request"]["id"])
+    assert request is not None
+    assert request.status == "sent"
+    assert db.get(Contract, contract.id).stage == "client_review"
+    assert db.query(OutboundMessage).filter_by(review_request_id=request.id).one().status == "failed"
+    assert payload["review_link"] == review_service.review_link(
+        review_service.public_token_for_request(request)
+    )
+    assert all(payload["request"]["token"] not in str(event.event_metadata) for event in _events(db, contract.id))
+    assert "ContractOps AI" in delivered_content["text_body"]
+    assert "Synthetic Sender (sender@example.invalid)" in delivered_content["text_body"]
+    assert "Do not forward" in delivered_content["text_body"]
+    assert payload["review_link"] in delivered_content["html_body"]
+
+
+def test_resend_reuses_review_and_token_without_lifecycle_transition(
+    review_db, monkeypatch
+):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("failed", None, "smtp_send_failed", None),
+    )
+    sent = _send(TestClient(app), contract.id)
+    review_id = sent["request"]["id"]
+    event_names = _event_names(db, contract.id)
+    db.execute(
+        text(
+            "UPDATE outbound_messages SET created_at = :created_at "
+            "WHERE review_request_id = :review_id"
+        ),
+        {
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=2),
+            "review_id": review_id,
+        },
+    )
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult(
+            "sent", "smtp-message-123", None, datetime.now(timezone.utc)
+        ),
+    )
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/reviews/{review_id}/resend",
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["review_link"] == sent["review_link"]
+    assert payload["request"]["id"] == review_id
+    assert payload["request"]["token"] == sent["request"]["token"]
+    assert payload["delivery"]["status"] == "sent"
+    assert len(payload["request"]["delivery_history"]) == 2
+    db.expire_all()
+    assert db.query(ReviewRequest).filter_by(contract_id=contract.id).count() == 1
+    assert db.query(OutboundMessage).filter_by(review_request_id=review_id).count() == 2
+    assert db.get(Contract, contract.id).stage == "client_review"
+    assert _event_names(db, contract.id) == event_names
+
+    history = TestClient(app).get(
+        f"/api/contracts/{contract.id}/reviews",
+        headers=AUTH,
+    )
+    assert history.status_code == 200
+    listed = history.json()[0]
+    assert listed["delivery"]["status"] == "sent"
+    assert [row["status"] for row in listed["delivery_history"]] == ["failed", "sent"]
+
+
+def test_review_resend_cooldown_is_deterministic(review_db, monkeypatch):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("failed", None, "smtp_send_failed", None),
+    )
+    sent = _send(TestClient(app), contract.id)
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/reviews/{sent['request']['id']}/resend",
+        headers=AUTH,
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == {"error": "email_resend_cooldown"}
+    assert db.query(ReviewRequest).filter_by(contract_id=contract.id).count() == 1
+    assert db.query(OutboundMessage).filter_by(review_request_id=sent["request"]["id"]).count() == 1
+
+
+def test_localhost_public_url_failure_is_recorded_without_raw_exception(
+    review_db, monkeypatch
+):
+    _db, create_contract = review_db
+    contract, _ = create_contract()
+    smtp_env = {
+        "APP_ENV": "demo",
+        "EMAIL_DELIVERY_ENABLED": "true",
+        "SMTP_HOST": "smtp.example.com",
+        "SMTP_PORT": "587",
+        "SMTP_FROM_EMAIL": "sender@example.com",
+        "SMTP_USE_TLS": "true",
+        "SMTP_USE_SSL": "false",
+        "PUBLIC_APP_URL": "http://localhost:3000",
+    }
+    for key, value in smtp_env.items():
+        monkeypatch.setenv(key, value)
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/review/send",
+        headers=AUTH,
+        json={
+            "recipient_name": "Synthetic Reviewer",
+            "recipient_email": "reviewer@example.invalid",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivery"]["status"] == "failed"
+    assert response.json()["delivery"]["safe_error_code"] == "public_app_url_invalid"
+
+
+def test_public_review_rate_limit_uses_hashed_token(review_db, monkeypatch):
+    _db, create_contract = review_db
+    contract, _ = create_contract()
+    sent = _send(TestClient(app), contract.id)
+    token = sent["request"]["token"]
+    captured = {}
+
+    def deny(key):
+        captured["key"] = key
+        return False
+
+    monkeypatch.setattr("app.routers.reviews_public.check_rate_limit", deny)
+
+    response = TestClient(app).get(f"/api/review/{token}")
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == {"error": "rate_limited"}
+    assert token not in captured["key"]
+    assert hashlib.sha256(token.encode("utf-8")).hexdigest() in captured["key"]
