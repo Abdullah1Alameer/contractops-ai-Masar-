@@ -8,13 +8,18 @@ import { ReviewStatusBadge } from "@/components/SendForReviewDialog";
 import Button from "@/components/ui/Button";
 import Stat from "@/components/ui/Stat";
 import Timeline from "@/components/ui/Timeline";
-import SectionHeader from "@/components/ui/SectionHeader";
 import RefreshingDot from "@/components/ui/RefreshingDot";
 import { SkeletonCard, SkeletonKPI } from "@/components/ui/Skeleton";
 import { api } from "@/lib/api";
 import { mapActivityEvents } from "@/lib/activity";
 import { useCachedFetch } from "@/lib/cache";
+import AreaTrend from "@/components/charts/AreaTrend";
+import BarList from "@/components/charts/BarList";
+import ChartCard from "@/components/charts/ChartCard";
+import Donut from "@/components/charts/Donut";
+import StackedBar from "@/components/charts/StackedBar";
 import { useI18n } from "@/lib/i18n";
+import { cn, formatCount, formatDate, formatNum } from "@/lib/utils";
 import type { ContractListItem, DeadlineRow, ReviewRequestRow } from "@/lib/types";
 
 type DashboardAggregate = {
@@ -84,7 +89,7 @@ function mapSummaryToAgg(raw: DashboardSummaryResponse) {
 }
 
 export default function DashboardPage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { data: summary, isLoading, isValidating, error, refresh } = useCachedFetch(
     "dashboard:summary",
     () => api<DashboardSummaryResponse>("/api/dashboard/summary")
@@ -104,6 +109,92 @@ export default function DashboardPage() {
   const negotiationCount = mapped?.negotiationCount ?? 0;
   const recentContracts = mapped?.recentContracts ?? [];
 
+  /**
+   * Chart series derived from the summary already on the page — the dashboard
+   * makes no extra requests to render its analytics.
+   */
+  const workloadSegments = useMemo(
+    () => [
+      { label: t("dashboard.kpi.awaitingLegal"), value: approvalKpis?.pending_legal ?? 0 },
+      { label: t("dashboard.kpi.awaitingFinance"), value: approvalKpis?.pending_finance ?? 0 },
+      { label: t("dashboard.kpi.awaitingExecutive"), value: approvalKpis?.pending_executive ?? 0 },
+      { label: t("dashboard.kpi.readyToSign"), value: sigKpis?.awaiting_signature ?? 0 },
+      { label: t("dashboard.kpi.completed"), value: sigKpis?.completed_signatures ?? 0 },
+    ],
+    [approvalKpis, sigKpis, t],
+  );
+
+  const lifecycleSlices = useMemo(
+    () =>
+      [
+        { label: t("dashboard.kpi.activeContracts"), value: agg?.active ?? 0 },
+        { label: t("dashboard.kpi.negotiationsOpen"), value: negotiationCount },
+        { label: t("dashboard.kpi.readyToSign"), value: sigKpis?.awaiting_signature ?? 0 },
+        { label: t("dashboard.kpi.completed"), value: sigKpis?.completed_signatures ?? 0 },
+        { label: t("dashboard.kpi.rejected"), value: sigKpis?.declined_requests ?? 0 },
+      ].filter((d) => d.value > 0),
+    [agg?.active, negotiationCount, sigKpis, t],
+  );
+
+  // Magnitude, so this is a sequential bar list rather than five more hues.
+  const riskRows = useMemo(
+    () =>
+      (agg?.riskContracts ?? [])
+        .filter((c) => c.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6)
+        .map((c) => ({ label: c.title, value: c.score })),
+    [agg?.riskContracts],
+  );
+
+  /**
+   * Intake trend: contracts created per month, oldest → newest. Derived from
+   * the recent-contracts list already on the page, so it costs no extra
+   * request. Month labels come from the locale so the Arabic UI stays Arabic.
+   */
+  const intakeTrend = useMemo(() => {
+    const buckets = new Map<string, { label: string; value: number; sort: number }>();
+    for (const c of recentContracts) {
+      if (!c.created_at) continue;
+      const d = new Date(c.created_at);
+      if (Number.isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      const label = new Intl.DateTimeFormat(lang === "ar" ? "ar-SA-u-nu-arab" : "en-US", {
+        calendar: "gregory",
+        month: "short",
+      }).format(d);
+      const prev = buckets.get(key);
+      buckets.set(key, {
+        label,
+        value: (prev?.value ?? 0) + 1,
+        sort: d.getFullYear() * 12 + d.getMonth(),
+      });
+    }
+    return Array.from(buckets.values()).sort((a, b) => a.sort - b.sort).map(({ label, value }) => ({ label, value }));
+  }, [recentContracts, lang]);
+
+  /**
+   * Deadline pressure by severity across both the overdue and upcoming lists.
+   * Magnitude, so it renders as a sequential bar list rather than more hues.
+   */
+  const severityRows = useMemo(() => {
+    const order = ["critical", "high", "medium", "low"];
+    const labels: Record<string, string> = {
+      critical: "حرجة",
+      high: "مرتفعة",
+      medium: "متوسطة",
+      low: "منخفضة",
+    };
+    const counts = new Map<string, number>();
+    for (const d of [...(agg?.overdueList ?? []), ...(agg?.upcomingList ?? [])]) {
+      const k = (d.row.severity ?? "low").toLowerCase();
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return order
+      .filter((k) => (counts.get(k) ?? 0) > 0)
+      .map((k) => ({ label: labels[k] ?? k, value: counts.get(k) ?? 0 }));
+  }, [agg?.overdueList, agg?.upcomingList]);
+
   const coverageTone = useMemo(() => {
     if (agg?.coveragePct == null) return "default" as const;
     if (agg.coveragePct >= 80) return "success" as const;
@@ -114,7 +205,7 @@ export default function DashboardPage() {
   if (error) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold">{t("dashboard.title")}</h1>
+        <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">{t("dashboard.title")}</h1>
         <Card>
           <CardBody className="text-center">
             <p className="text-danger-600">{t("common.error")}</p>
@@ -129,7 +220,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 motion-safe:animate-fadeIn">
-      <h1 className="text-title flex items-center gap-2">
+      <h1 className="flex items-center gap-2 text-3xl font-extrabold tracking-tight text-slate-900 md:text-4xl">
         {t("dashboard.title")}
         {isValidating && <RefreshingDot />}
       </h1>
@@ -149,216 +240,243 @@ export default function DashboardPage() {
         </>
       ) : agg ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Link href="/contracts"><Stat label={t("dashboard.kpi.activeContracts")} value={agg.active} tone="brand" /></Link>
-            <Link href="/reviews"><Stat label={t("dashboard.kpi.pendingReviews")} value={reviewItems.filter((r) => r.status === "sent" || r.status === "opened").length} tone="info" /></Link>
-            <Link href="/contracts?stage=negotiation"><Stat label={t("dashboard.kpi.negotiationsOpen")} value={negotiationCount} /></Link>
-            <Link href="/contracts?stage=internal_review&role=legal"><Stat label={t("dashboard.kpi.awaitingLegal")} value={approvalKpis?.pending_legal ?? 0} tone="warning" /></Link>
-            <Link href="/contracts?stage=internal_review&role=finance"><Stat label={t("dashboard.kpi.awaitingFinance")} value={approvalKpis?.pending_finance ?? 0} tone="warning" /></Link>
-            <Link href="/contracts?stage=internal_review&role=executive"><Stat label={t("dashboard.kpi.awaitingExecutive")} value={approvalKpis?.pending_executive ?? 0} tone="warning" /></Link>
-            <Link href="/contracts?stage=awaiting_signature"><Stat label={t("dashboard.kpi.readyToSign")} value={sigKpis?.awaiting_signature ?? 0} tone="success" /></Link>
-            <Link href="/contracts?stage=active"><Stat label={t("dashboard.kpi.completed")} value={sigKpis?.completed_signatures ?? 0} tone="success" /></Link>
-            <Stat label={t("dashboard.kpi.rejected")} value={sigKpis?.declined_requests ?? 0} tone="danger" />
+          {/* Headline row. Nine equally-weighted tiles gave the reader no order
+              to scan in; the five that drive decisions lead, and the rest are
+              legible inside the panels below. */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <Link href="/contracts">
+              <Stat label={t("dashboard.kpi.activeContracts")} value={formatCount(agg.active, lang)} tone="brand" />
+            </Link>
+            <Link href="/reviews">
+              <Stat
+                label={t("dashboard.kpi.pendingReviews")}
+                value={formatCount(reviewItems.filter((r) => r.status === "sent" || r.status === "opened").length, lang)}
+                tone="info"
+              />
+            </Link>
+            <Link href="/contracts?stage=negotiation">
+              <Stat label={t("dashboard.kpi.negotiationsOpen")} value={formatCount(negotiationCount, lang)} />
+            </Link>
+            <Link href="/contracts?stage=awaiting_signature">
+              <Stat label={t("dashboard.kpi.readyToSign")} value={formatCount(sigKpis?.awaiting_signature ?? 0, lang)} tone="success" />
+            </Link>
+            <Stat label={t("dashboard.kpi.rejected")} value={formatCount(sigKpis?.declined_requests ?? 0, lang)} tone="danger" />
+          </div>
+
+          {/* Analytics grid */}
+          <div className="grid gap-5 lg:grid-cols-12">
+            <ChartCard
+              title={t("dashboard.section.lifecycleMix")}
+              subtitle={t("dashboard.section.lifecycleMixHint")}
+              className="lg:col-span-5"
+            >
+              {lifecycleSlices.length === 0 ? (
+                <EmptyState title={t("common.empty")} />
+              ) : (
+                <Donut slices={lifecycleSlices} centerLabel={t("dashboard.kpi.activeContracts")} />
+              )}
+            </ChartCard>
+
+            <ChartCard
+              title={t("dashboard.section.workload")}
+              subtitle={t("dashboard.section.workloadHint")}
+              className="lg:col-span-7"
+              delay={0.06}
+            >
+              <StackedBar segments={workloadSegments} />
+            </ChartCard>
+
+            <ChartCard
+              title={t("dashboard.section.riskRanking")}
+              subtitle={t("dashboard.section.riskRankingHint")}
+              className="lg:col-span-7"
+              delay={0.12}
+            >
+              {riskRows.length === 0 ? (
+                <EmptyState title={t("common.empty")} />
+              ) : (
+                <BarList rows={riskRows} />
+              )}
+            </ChartCard>
+
+            <ChartCard
+              title={t("dashboard.section.severity")}
+              subtitle={t("dashboard.section.severityHint")}
+              className="lg:col-span-5"
+              delay={0.24}
+            >
+              {severityRows.length === 0 ? (
+                <EmptyState title={t("empty.deadlines")} />
+              ) : (
+                <BarList rows={severityRows} />
+              )}
+            </ChartCard>
+
+            <ChartCard
+              title={t("dashboard.section.intake")}
+              subtitle={t("dashboard.section.intakeHint")}
+              className="lg:col-span-7"
+              delay={0.18}
+            >
+              {intakeTrend.length < 2 ? (
+                <EmptyState title={t("common.empty")} />
+              ) : (
+                <AreaTrend points={intakeTrend} />
+              )}
+            </ChartCard>
+
+
+            <ChartCard
+              title={t("dashboard.section.recentActivity")}
+              className="lg:col-span-5"
+              delay={0.3}
+            >
+              {activityItems.length === 0 ? (
+                <EmptyState title={t("common.empty")} />
+              ) : (
+                <Timeline items={activityItems.slice(0, 6)} />
+              )}
+            </ChartCard>
           </div>
 
           {agg.active === 0 && agg.total === 0 ? (
             <EmptyState title={t("dashboard.empty.noData")} actionLabel={t("nav.upload")} onAction={() => (window.location.href = "/upload")} />
           ) : (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="space-y-6">
-                <Card className="surface-panel border-0 shadow-none">
-                  <CardHeader>
-                    <SectionHeader title={t("dashboard.section.recentActivity")} />
-                  </CardHeader>
-                  <CardBody>
-                    {activityItems.length === 0 ? (
-                      <EmptyState title={t("common.empty")} />
-                    ) : (
-                      <Timeline items={activityItems} />
-                    )}
-                  </CardBody>
-                </Card>
-                <Card className="surface-panel border-0 shadow-none">
-                  <CardHeader>
-                    <SectionHeader title={t("dashboard.section.aiInsights")} />
-                  </CardHeader>
-                  <CardBody>
-                    <ul className="space-y-2">
-                      {agg.riskContracts.filter((c) => c.score > 0).slice(0, 5).map((c) => (
-                        <li key={c.id}>
-                          <Link href={`/contracts/${c.id}`} className="link-strong">
-                            {c.title}
+            <>
+              {/* Operations row. Three equal columns on one baseline — the
+                  previous two-column stack let the left side run twice the
+                  height of the right, which read as an unfinished layout. */}
+              <div className="grid items-start gap-5 lg:grid-cols-3">
+                <ChartCard title={t("dashboard.section.upcoming")}>
+                  {agg.upcomingList.length === 0 ? (
+                    <EmptyState title={t("empty.deadlines")} />
+                  ) : (
+                    <ul className="divide-y divide-slate-100">
+                      {agg.upcomingList.slice(0, 5).map((d) => (
+                        <li key={`${d.contractId}-${d.row.id ?? d.row.title}`} className="py-3 first:pt-0">
+                          <Link
+                            href={`/contracts/${d.contractId}`}
+                            className="group flex items-start justify-between gap-3"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-bold text-slate-900 group-hover:text-emerald-800">
+                                {d.row.title ?? d.contractTitle}
+                              </span>
+                              <span className="mt-0.5 block truncate text-xs text-slate-500">{d.contractTitle}</span>
+                            </span>
+                            {/* Days remaining, not the raw date: the whole
+                                product is about how much of a notice window is
+                                left. Tone follows urgency. */}
+                            <span
+                              className={cn(
+                                "tnum shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold",
+                                (d.row.days_remaining ?? 99) <= 7
+                                  ? "border-rose-100 bg-rose-50 text-rose-700"
+                                  : (d.row.days_remaining ?? 99) <= 21
+                                    ? "border-amber-100 bg-amber-50 text-amber-700"
+                                    : "border-emerald-100 bg-emerald-50 text-emerald-700",
+                              )}
+                            >
+                              {d.row.days_remaining != null
+                                ? `${formatNum(d.row.days_remaining, lang)} ${t("common.days")}`
+                                : formatDate(d.row.deadline_date, lang)}
+                            </span>
                           </Link>
-                          <span className="ms-2 text-xs font-bold text-danger-600">{c.score}</span>
                         </li>
                       ))}
-                      {agg.riskContracts.every((c) => c.score === 0) && <p className="text-hint">{t("common.empty")}</p>}
                     </ul>
-                  </CardBody>
-                </Card>
+                  )}
+                </ChartCard>
+
+                <ChartCard title={t("dashboard.section.recentUpdates")} delay={0.06}>
+                  {recentContracts.length === 0 ? (
+                    <EmptyState title={t("common.empty")} />
+                  ) : (
+                    <ul className="divide-y divide-slate-100">
+                      {recentContracts.slice(0, 5).map((c) => (
+                        <li key={c.id} className="py-3 first:pt-0">
+                          <Link
+                            href={`/contracts/${c.id}`}
+                            className="group flex items-center justify-between gap-3"
+                          >
+                            <span className="min-w-0 truncate text-sm font-bold text-slate-900 group-hover:text-emerald-800">
+                              {c.title}
+                            </span>
+                            <span className="tnum shrink-0 text-xs font-medium text-slate-500">
+                              {formatDate(c.created_at, lang)}
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </ChartCard>
+
+                <ChartCard
+                  title={t("review.dashboard.title")}
+                  delay={0.12}
+                  action={
+                    <Link href="/reviews" className="text-xs font-bold text-emerald-700 hover:text-emerald-800">
+                      {t("common.viewAll")}
+                    </Link>
+                  }
+                >
+                  {reviewItems.length === 0 ? (
+                    <EmptyState title={t("review.dashboard.empty")} />
+                  ) : (
+                    <ul className="divide-y divide-slate-100">
+                      {reviewItems.slice(0, 5).map((r) => (
+                        <li key={r.id} className="flex items-center justify-between gap-3 py-3 first:pt-0">
+                          <span className="min-w-0">
+                            <Link
+                              href={`/contracts/${r.contract_id}`}
+                              className="block truncate text-sm font-bold text-slate-900 hover:text-emerald-800"
+                            >
+                              {r.contract_title ?? r.contract_id}
+                            </Link>
+                            <span className="mt-0.5 block truncate text-xs text-slate-500">
+                              {r.recipient_name} · {formatDate(r.created_at, lang)}
+                            </span>
+                          </span>
+                          <ReviewStatusBadge status={r.status} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </ChartCard>
+              </div>
+
+              {/* Progress row */}
+              <div className="grid items-start gap-5 lg:grid-cols-2">
                 {sigKpis && (
-                  <Card>
-                    <CardHeader>
-                      <h2 className="font-bold">{t("dashboard.section.signatureProgress")}</h2>
-                    </CardHeader>
-                    <CardBody className="grid gap-2 sm:grid-cols-2">
-                      <Link href="/contracts?stage=awaiting_signature" className="text-sm font-semibold text-brand-700">
-                        {t("dashboard.kpi.sigAwaiting")}: {sigKpis.awaiting_signature}
-                      </Link>
-                      <Link href="/contracts?stage=partially_signed" className="text-sm font-semibold text-brand-700">
-                        {t("dashboard.kpi.sigPartial")}: {sigKpis.partially_signed}
-                      </Link>
-                    </CardBody>
-                  </Card>
+                  <ChartCard title={t("dashboard.section.signatureProgress")} delay={0.06}>
+                    <StackedBar
+                      segments={[
+                        { label: t("dashboard.kpi.sigAwaiting"), value: sigKpis.awaiting_signature },
+                        { label: t("dashboard.kpi.sigPartial"), value: sigKpis.partially_signed },
+                        { label: t("dashboard.kpi.completed"), value: sigKpis.completed_signatures },
+                      ]}
+                    />
+                  </ChartCard>
                 )}
-              </div>
-              <div className="space-y-6">
-                <Card className="surface-panel border-0 shadow-none">
-                  <CardHeader>
-                    <SectionHeader title={t("dashboard.section.recentUpdates")} />
-                  </CardHeader>
-                  <CardBody className="divide-y divide-neutral-100 p-0">
-                    {recentContracts.map((c) => (
-                      <Link key={c.id} href={`/contracts/${c.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-neutral-50">
-                        <span className="font-medium text-neutral-900">{c.title}</span>
-                        <span className="text-xs text-neutral-500">{c.created_at?.slice(0, 10) ?? "—"}</span>
-                      </Link>
-                    ))}
-                  </CardBody>
-                </Card>
-                <Panel title={t("dashboard.section.upcoming")} empty={t("empty.deadlines")} rows={agg.upcomingList.slice(0, 8)} t={t} />
-                <RiskPanel title={t("dashboard.section.highRisk")} contracts={agg.riskContracts.slice(0, 5)} empty={t("dashboard.empty.noData")} t={t} />
+
                 {approvalKpis && (
-                  <Card>
-                    <CardHeader>
-                      <h2 className="font-bold">{t("dashboard.section.approvalProgress")}</h2>
-                    </CardHeader>
-                    <CardBody className="space-y-2 text-sm">
-                      <Link href="/contracts?stage=internal_review&role=legal" className="block text-brand-700">
-                        {t("dashboard.kpi.pendingLegalApproval")}: {approvalKpis.pending_legal}
-                      </Link>
-                      <Link href="/contracts?stage=approved" className="block text-brand-700">
-                        {t("dashboard.kpi.awaitingSignature")}: {approvalKpis.approved_awaiting_signature}
-                      </Link>
-                    </CardBody>
-                  </Card>
+                  <ChartCard title={t("dashboard.section.approvalProgress")} delay={0.12}>
+                    <StackedBar
+                      segments={[
+                        { label: t("dashboard.kpi.pendingLegalApproval"), value: approvalKpis.pending_legal },
+                        { label: t("dashboard.kpi.awaitingFinance"), value: approvalKpis.pending_finance },
+                        { label: t("dashboard.kpi.awaitingSignature"), value: approvalKpis.approved_awaiting_signature },
+                      ]}
+                    />
+                  </ChartCard>
                 )}
               </div>
-            </div>
+            </>
           )}
 
-          <Card>
-            <CardHeader>
-              <Link href="/reviews" className="font-bold text-gray-900 hover:text-brand-700">
-                {t("review.dashboard.title")}
-              </Link>
-            </CardHeader>
-            <CardBody className="pt-0">
-              {reviewItems.length === 0 ? (
-                <p className="py-6 text-center text-sm text-gray-500">{t("review.dashboard.empty")}</p>
-              ) : (
-                <ul className="divide-y divide-gray-100">
-                  {reviewItems.slice(0, 12).map((r) => (
-                    <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
-                      <div>
-                        <Link href={`/contracts/${r.contract_id}`} className="text-sm font-semibold text-brand-700 hover:underline">
-                          {r.contract_title ?? r.contract_id}
-                        </Link>
-                        <p className="text-xs text-gray-500">
-                          {t("review.dashboard.recipient")}: {r.recipient_name} · {r.created_at?.slice(0, 10)}
-                        </p>
-                      </div>
-                      <ReviewStatusBadge status={r.status} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardBody>
-          </Card>
         </>
       ) : null}
     </div>
-  );
-}
-
-function Panel({
-  title,
-  empty,
-  rows,
-  t,
-}: {
-  title: string;
-  empty: string;
-  rows: { contractTitle: string; contractId: string; row: DeadlineRow }[];
-  t: (k: import("@/lib/i18n").TKey) => string;
-}) {
-  return (
-    <Card className="flex flex-col">
-      <CardHeader>
-        <h2 className="font-bold text-gray-900">{title}</h2>
-      </CardHeader>
-      <CardBody className="flex-1 pt-0">
-        {rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-gray-500">{empty}</p>
-        ) : (
-          <ul className="divide-y divide-gray-100">
-            {rows.map(({ contractId, contractTitle, row }) => (
-              <li key={row.id} className="py-3 motion-safe:transition-colors hover:bg-muted-50/80">
-                <Link href={`/contracts/${contractId}`} className="block">
-                  <p className="text-sm font-semibold text-gray-900">{row.title ?? row.type}</p>
-                  <p className="text-xs text-gray-500">{contractTitle}</p>
-                  <p className="mt-1 text-xs tabular-nums text-danger-600">
-                    {row.deadline_date ?? "—"}
-                    {row.days_remaining != null && (
-                      <span className="ms-2 text-gray-600">
-                        ({row.days_remaining} {t("common.days")})
-                      </span>
-                    )}
-                  </p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardBody>
-    </Card>
-  );
-}
-
-function RiskPanel({
-  title,
-  contracts,
-  empty,
-  t,
-}: {
-  title: string;
-  contracts: { id: string; title: string; score: number }[];
-  empty: string;
-  t: (k: import("@/lib/i18n").TKey) => string;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <h2 className="font-bold text-gray-900">{title}</h2>
-      </CardHeader>
-      <CardBody className="pt-0">
-        {contracts.length === 0 || contracts.every((c) => c.score === 0) ? (
-          <p className="py-6 text-center text-sm text-gray-500">{empty}</p>
-        ) : (
-          <ul className="divide-y divide-gray-100">
-            {contracts
-              .filter((c) => c.score > 0)
-              .map((c) => (
-                <li key={c.id} className="flex items-center justify-between py-3 hover:bg-muted-50/80">
-                  <Link href={`/contracts/${c.id}`} className="text-sm font-semibold text-brand-700 hover:underline">
-                    {c.title}
-                  </Link>
-                  <span className="rounded-full bg-danger-100 px-2 py-0.5 text-xs font-bold text-danger-700">{c.score}</span>
-                </li>
-              ))}
-          </ul>
-        )}
-      </CardBody>
-    </Card>
   );
 }

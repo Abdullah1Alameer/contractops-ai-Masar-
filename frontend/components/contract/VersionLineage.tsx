@@ -9,7 +9,7 @@ import RiskScoreRing from "@/components/ui/RiskScoreRing";
 import { transitionReasonKey } from "@/lib/lineageLinks";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { VersionLineageEvent, VersionLineageResponse, VersionLineageVersion } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 const CATEGORY_DOT: Record<string, string> = {
   version: "bg-neutral-400",
@@ -41,7 +41,7 @@ function VersionNode({
   onEventClick: (e: VersionLineageEvent) => void;
   highlightEventId?: string | null;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   return (
     <div className={cn("relative ps-6", v.is_current && "rounded-card ring-2 ring-brand-600/20")}>
       <span className="absolute start-0 top-3 h-3 w-3 rounded-full bg-brand-600 ring-4 ring-brand-100" aria-hidden />
@@ -57,7 +57,7 @@ function VersionNode({
             </div>
             <p className="mt-1 text-sm text-neutral-600">
               {t("versions.audit.uploadedBy")}: {v.created_by_display ?? v.created_by ?? "—"} ·{" "}
-              {v.created_at?.slice(0, 10) ?? "—"}
+              {formatDate(v.created_at, lang)}
             </p>
             {v.change_summary && (
               <p className="mt-1 text-sm text-neutral-700">

@@ -7,10 +7,11 @@ import { Card, CardBody } from "@/components/ui/Card";
 import { SkeletonTable } from "@/components/ui/Skeleton";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatNum } from "@/lib/utils";
 import type { ContractListItem } from "@/lib/types";
 
 export default function VersionsHubPage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [rows, setRows] = useState<ContractListItem[] | null>(null);
 
   useEffect(() => {
@@ -38,7 +39,7 @@ export default function VersionsHubPage() {
               <Link key={c.id} href={`/contracts/${c.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-muted-50">
                 <span className="font-semibold">{c.title}</span>
                 <span className="text-sm text-gray-600">
-                  v{c.current_version_number ?? 1}/{c.total_versions ?? 1}
+                  {formatNum(c.current_version_number ?? 1, lang)}/{formatNum(c.total_versions ?? 1, lang)}
                 </span>
               </Link>
             ))}

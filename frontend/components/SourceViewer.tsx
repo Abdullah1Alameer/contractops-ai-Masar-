@@ -6,6 +6,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { fetchContractFileBlob } from "@/lib/api";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatNum } from "@/lib/utils";
 import type { LayoutBlock, SourceTarget } from "@/lib/types";
 
 interface RawPage {
@@ -32,7 +33,7 @@ function highlightBlocks(data: RawPage, target: SourceTarget | null): LayoutBloc
 }
 
 export default function SourceViewer({ contractId, target }: { contractId: string; target: SourceTarget | null }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [page, setPage] = useState<number>(target?.page ?? 1);
   const [data, setData] = useState<RawPage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -170,7 +171,7 @@ export default function SourceViewer({ contractId, target }: { contractId: strin
               {t("detail.viewer.prev")}
             </button>
             <span>
-              {t("detail.viewer.page")} {page} / {data.total_pages}
+              {t("detail.viewer.page")} {formatNum(page, lang)} / {formatNum(data.total_pages, lang)}
             </span>
             <button
               type="button"

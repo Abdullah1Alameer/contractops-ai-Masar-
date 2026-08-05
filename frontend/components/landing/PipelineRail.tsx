@@ -1,47 +1,59 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-import SectionHeader from "@/components/ui/SectionHeader";
 import { useI18n } from "@/lib/i18n";
 import type { PipelineBucketSummary } from "@/lib/pipeline";
+import { formatNum } from "@/lib/utils";
 
 import PipelineStageCard from "./PipelineStageCard";
 
-function ConnectorArrow({ rtl }: { rtl: boolean }) {
-  return (
-    <div className="hidden shrink-0 items-center justify-center px-0.5 md:flex" aria-hidden>
-      <svg
-        className="h-4 w-4 text-neutral-300 dark:text-neutral-600"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        {rtl ? <path d="M15 6l-6 6 6 6" /> : <path d="M9 6l6 6-6 6" />}
-      </svg>
-    </div>
-  );
-}
-
+/**
+ * The contract lifecycle, read as one track.
+ *
+ * A spine runs behind the cards, filled up to the furthest stage that actually
+ * holds contracts, so the pipeline reads as progress rather than as a row of
+ * tiles. The fill is a child of a normal flex container, so it inherits the
+ * writing direction and grows from the correct edge in both RTL and LTR — the
+ * previous mirrored-arrow approach needed a JS direction check and a re-render.
+ */
 export default function PipelineRail({ buckets }: { buckets: PipelineBucketSummary[] }) {
   const { t, lang } = useI18n();
-  const [rtl, setRtl] = useState(true);
 
-  useEffect(() => {
-    setRtl(document.documentElement.dir === "rtl");
-  }, []);
+  const lastPopulated = buckets.reduce((acc, b, i) => (b.count > 0 ? i : acc), -1);
+  const progressPct = buckets.length > 0 ? ((lastPopulated + 0.5) / buckets.length) * 100 : 0;
+  const totalCount = buckets.reduce((sum, b) => sum + b.count, 0);
 
   return (
-    <section className="space-y-4">
-      <SectionHeader title={t("home.pipeline.title")} />
-      <div className="-mx-1 flex gap-2 overflow-x-auto pb-2 snap-x snap-mandatory px-1 2xl:grid 2xl:grid-cols-10 2xl:overflow-visible 2xl:snap-none">
-        {buckets.map((bucket, i) => (
-          <div key={bucket.key} className="flex shrink-0 items-stretch 2xl:contents">
-            <PipelineStageCard bucket={bucket} index={i} locale={lang} />
-            {i < buckets.length - 1 ? <ConnectorArrow rtl={rtl} /> : null}
-          </div>
-        ))}
+    <section className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 md:text-3xl">
+            {t("home.pipeline.title")}
+          </h2>
+          <p className="mt-1.5 text-base font-medium text-slate-500">
+            <span className="tnum font-bold text-emerald-600">{formatNum(totalCount, lang)}</span>
+            {" · "}
+            {t("home.kpi.totalContracts")}
+          </p>
+        </div>
+      </div>
+
+      <div className="relative">
+        {/* Spine, aligned with the step numbers on the cards. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-[3.4rem] hidden h-px bg-slate-200 2xl:block"
+          aria-hidden
+        >
+          <div
+            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-settle"
+            style={{ width: `${Math.max(progressPct, 0)}%` }}
+          />
+        </div>
+
+        <div className="stagger -mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-3 2xl:grid 2xl:grid-cols-10 2xl:snap-none 2xl:overflow-visible">
+          {buckets.map((bucket, i) => (
+            <PipelineStageCard key={bucket.key} bucket={bucket} index={i} locale={lang} />
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -50,8 +62,8 @@ export default function PipelineRail({ buckets }: { buckets: PipelineBucketSumma
 export function PipelineRailSkeleton() {
   return (
     <div className="flex gap-3 overflow-hidden">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="surface-glass h-40 min-w-[9.5rem] skeleton-shimmer" />
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="skeleton-shimmer h-44 min-w-[10.5rem] rounded-xl2" />
       ))}
     </div>
   );

@@ -46,7 +46,7 @@ import type {
   SourceTarget,
   DeadlineRow,
 } from "@/lib/types";
-import { cn, formatSAR } from "@/lib/utils";
+import { cn, formatDate, formatNum, formatSAR } from "@/lib/utils";
 
 type Tab =
   | "overview"
@@ -295,7 +295,7 @@ export default function ContractDetailPage() {
         <div>
           <p className="text-eyebrow">{t("versions.col.version")}</p>
           <p className="text-lg font-bold">
-            v{detail.current_version_number ?? 1}/{detail.total_versions ?? 1}
+            {formatNum(detail.current_version_number ?? 1, lang)}/{formatNum(detail.total_versions ?? 1, lang)}
           </p>
         </div>
         <div>
@@ -603,7 +603,7 @@ export default function ContractDetailPage() {
 }
 
 function ContractActivityTab({ contractId }: { contractId: string }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { data, isLoading } = useCachedFetch(`activity:${contractId}`, () =>
     fetchActivity(contractId).then((r) => r.events ?? [])
   );
@@ -621,7 +621,7 @@ function ContractActivityTab({ contractId }: { contractId: string }) {
 const ContractDocumentsTab = dynamic(
   () =>
     Promise.resolve(function ContractDocumentsTabInner({ contractId }: { contractId: string }) {
-      const { t } = useI18n();
+      const { t, lang } = useI18n();
       const [versions, setVersions] = useState<import("@/lib/types").ContractVersionRow[]>([]);
 
       useEffect(() => {
@@ -637,7 +637,7 @@ const ContractDocumentsTab = dynamic(
           {versions.map((v) => (
             <li key={v.id} className="flex items-center justify-between py-3">
               <span className="font-medium">{v.version_label}</span>
-              <span className="text-sm text-neutral-500">{v.created_at?.slice(0, 10) ?? "—"}</span>
+              <span className="text-sm text-neutral-500">{formatDate(v.created_at, lang)}</span>
             </li>
           ))}
         </ul>
