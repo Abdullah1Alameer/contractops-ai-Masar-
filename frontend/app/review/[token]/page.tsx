@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import FlowdownFindings from "@/components/FlowdownFindings";
 import FlowdownSummary from "@/components/FlowdownSummary";
 import { ReviewStatusBadge } from "@/components/SendForReviewDialog";
+import Logo from "@/components/Logo";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
@@ -21,7 +22,7 @@ import {
 } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { ReviewPortalPayload } from "@/lib/types";
-import { cn, formatSAR } from "@/lib/utils";
+import { cn, formatDate, formatSAR } from "@/lib/utils";
 
 type Tab = "summary" | "risks" | "obligations" | "timeline" | "payments" | "comparison";
 
@@ -150,14 +151,24 @@ export default function ReviewPortalPage() {
   if (!data) return <p className="p-8 text-center text-gray-400">{t("common.loading")}</p>;
 
   return (
-    <div className="min-h-screen bg-white">
-      <div className="border-b border-brand-100 bg-brand-50/50 px-4 py-6">
+    <div className="relative min-h-screen bg-[#F8FAFC]">
+      {/* Matches the ambient wash of the authenticated shell and the signer
+          portal, so all three public/private surfaces read as one product. */}
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden>
+        <div className="absolute -top-40 end-[-6rem] h-96 w-96 rounded-full bg-emerald-100/50 blur-[100px]" />
+        <div className="absolute bottom-[-10rem] start-[-8rem] h-[28rem] w-[28rem] rounded-full bg-teal-50/60 blur-[120px]" />
+      </div>
+
+      <div className="border-b border-white bg-white/70 px-4 py-6 backdrop-blur-2xl">
         <div className="mx-auto max-w-6xl">
-          <p className="text-sm font-medium text-brand-800">{t("review.portal.title")}</p>
-          <h1 className="text-2xl font-bold text-gray-900">{data.contract.title}</h1>
+          <div className="mb-3 flex items-center justify-between gap-4">
+            <Logo size="sm" tone="brand" />
+          </div>
+          <p className="text-sm font-semibold text-emerald-700">{t("review.portal.title")}</p>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">{data.contract.title}</h1>
           <div className="mt-2 flex flex-wrap gap-2">
             <ReviewStatusBadge status={data.status} />
-            {data.expires_at && <Badge tone="subtle">{data.expires_at.slice(0, 10)}</Badge>}
+            {data.expires_at && <Badge tone="subtle">{formatDate(data.expires_at, lang)}</Badge>}
           </div>
         </div>
       </div>

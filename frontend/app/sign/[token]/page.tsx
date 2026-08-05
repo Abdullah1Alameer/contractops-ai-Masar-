@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
+import Logo from "@/components/Logo";
 import SignatureCanvas from "@/components/SignatureCanvas";
 import TypedSignaturePreview from "@/components/TypedSignaturePreview";
 import { useToast } from "@/components/feedback/ToastProvider";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { SignerPublicPayload } from "@/lib/types";
+import { formatDate, formatNum } from "@/lib/utils";
 
 type Method = "drawn" | "typed" | "uploaded";
 
@@ -102,20 +104,22 @@ export default function SignPage() {
 
   if (errorCode) {
     return (
-      <div className="mx-auto max-w-lg space-y-4 p-8 text-center">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#F8FAFC] p-8 text-center">
         <PrototypeDisclosure />
-        <p className="text-danger-600">{t("signature.errorWithCode").replace("{code}", errorCode)}</p>
-        <Button variant="secondary" onClick={load}>
-          {t("common.retry")}
-        </Button>
+        <div className="glass-card mx-auto w-full max-w-lg space-y-4 p-8">
+          <p className="text-danger-600">{t("signature.errorWithCode").replace("{code}", errorCode)}</p>
+          <Button variant="secondary" onClick={load}>
+            {t("common.retry")}
+          </Button>
+        </div>
       </div>
     );
   }
   if (!data) {
     return (
-      <div className="p-8 text-center">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#F8FAFC] p-8 text-center">
         <PrototypeDisclosure />
-        <p>{t("common.loading")}</p>
+        <p className="text-sm font-medium text-slate-500">{t("common.loading")}</p>
       </div>
     );
   }
@@ -124,45 +128,61 @@ export default function SignPage() {
 
   if (data.declined) {
     return (
-      <div className="mx-auto max-w-lg p-8 text-center">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#F8FAFC] p-8 text-center">
         <PrototypeDisclosure />
-        <h1 className="text-xl font-bold">{t("signature.declinedState")}</h1>
+        <div className="glass-card mx-auto w-full max-w-lg space-y-4 p-8">
+          <h1 className="text-xl font-extrabold tracking-tight text-slate-900">{t("signature.declinedState")}</h1>
+        </div>
       </div>
     );
   }
 
   if (data.read_only && data.signer.status === "signed") {
     return (
-      <div className="mx-auto max-w-lg space-y-4 p-8 text-center">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#F8FAFC] p-8 text-center">
         <PrototypeDisclosure />
-        <h1 className="text-xl font-bold text-success-700">{t("signature.completed")}</h1>
-        <p className="text-sm text-gray-600">{data.signer.signed_at}</p>
+        <div className="glass-card mx-auto w-full max-w-lg space-y-4 p-8">
+          <h1 className="text-xl font-extrabold tracking-tight text-emerald-700">{t("signature.completed")}</h1>
+          <p className="text-sm font-medium text-slate-500">{formatDate(data.signer.signed_at, lang)}</p>
+        </div>
       </div>
     );
   }
 
   if (data.waiting_for_prior) {
     return (
-      <div className="mx-auto max-w-lg p-8 text-center">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#F8FAFC] p-8 text-center">
         <PrototypeDisclosure />
-        <p>{t("signature.waitingPrior")}</p>
+        <div className="glass-card mx-auto w-full max-w-lg space-y-4 p-8">
+          <p className="text-sm font-medium text-slate-600">{t("signature.waitingPrior")}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-muted-50/30 pb-24">
+    <div className="relative min-h-screen bg-[#F8FAFC] pb-24">
+      {/* Same ambient wash the authenticated shell uses, so the public signing
+          page reads as the same product rather than a bare form. */}
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden>
+        <div className="absolute -top-40 end-[-6rem] h-96 w-96 rounded-full bg-emerald-100/50 blur-[100px]" />
+        <div className="absolute bottom-[-10rem] start-[-8rem] h-[28rem] w-[28rem] rounded-full bg-teal-50/60 blur-[120px]" />
+      </div>
+
       <PrototypeDisclosure />
-      <header className="border-b border-brand-100 bg-white px-4 py-6">
+      <header className="border-b border-white bg-white/70 px-4 py-6 backdrop-blur-2xl">
         <div className="mx-auto max-w-4xl space-y-3">
-          <Badge tone="subtle">{t("signature.demoLabel")}</Badge>
-          <h1 className="text-2xl font-bold text-gray-900">{data.subject}</h1>
-          <p className="text-sm text-gray-600">
+          <div className="flex items-center justify-between gap-4">
+            <Logo size="sm" tone="brand" />
+            <Badge tone="subtle">{t("signature.demoLabel")}</Badge>
+          </div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">{data.subject}</h1>
+          <p className="text-sm font-medium text-slate-500">
             {data.sender_name} · {data.contract_title}
           </p>
           <div className="flex flex-wrap gap-2">
-            <span className="chip chip-active">
-              {data.progress.completed}/{data.progress.total}
+            <span className="chip chip-active tnum">
+              {formatNum(data.progress.completed, lang)}/{formatNum(data.progress.total, lang)}
             </span>
             <span className="chip">{data.signer.name}</span>
           </div>
@@ -198,7 +218,7 @@ export default function SignPage() {
           {method === "typed" && (
             <>
               <input
-                className="w-full rounded border px-3 py-2"
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20"
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
               />
@@ -210,7 +230,7 @@ export default function SignPage() {
             {consentLabel}
           </label>
           <input
-            className="w-full rounded border px-3 py-2 text-sm"
+            className="w-full rounded-xl border border-slate-200 bg-white/80 px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20"
             placeholder={t("signature.nameConfirm")}
             value={nameConfirm}
             onChange={(e) => setNameConfirm(e.target.value)}
@@ -221,7 +241,7 @@ export default function SignPage() {
             </Button>
           </div>
           <textarea
-            className="w-full rounded border px-3 py-2 text-sm"
+            className="w-full rounded-xl border border-slate-200 bg-white/80 px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20"
             placeholder={t("signature.decline")}
             value={declineReason}
             onChange={(e) => setDeclineReason(e.target.value)}
