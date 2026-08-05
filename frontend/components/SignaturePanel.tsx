@@ -45,6 +45,9 @@ export default function SignaturePanel({
   const [busy, setBusy] = useState(false);
   const [lastLink, setLastLink] = useState<string | null>(null);
   const [activated, setActivated] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [activationReason, setActivationReason] = useState("");
+  const [activationEvidence, setActivationEvidence] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -115,16 +118,17 @@ export default function SignaturePanel({
           </Button>
         )}
         {req && !["completed", "declined", "cancelled", "expired"].includes(req.status) && (
+          <div className="flex gap-2">
+            <input aria-label={t("signature.cancelReason")} placeholder={t("signature.cancelReason")} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
           <Button
             variant="secondary"
             size="sm"
             onClick={async () => {
               if (!req) return;
-              const reason = window.prompt(t("signature.cancelReason"));
-              if (!reason?.trim()) return;
+              if (!cancelReason.trim()) { toast.error(t("signature.cancelReason")); return; }
               setBusy(true);
               try {
-                await cancelSignatureRequest(req.id, reason.trim());
+                await cancelSignatureRequest(req.id, cancelReason.trim());
                 load();
               } catch {
                 toast.error(t("common.error"));
@@ -135,19 +139,22 @@ export default function SignaturePanel({
           >
             {t("signature.cancel")}
           </Button>
+          </div>
         )}
-        {req?.status === "completed" && (
+        {req?.status === "completed" && contractStage === "signed" && (
           <>
-            {!activated && <Button
+            {!activated && (
+              <div className="flex gap-2">
+              <input aria-label={t("signature.activationReason")} placeholder={t("signature.activationReason")} value={activationReason} onChange={(e) => setActivationReason(e.target.value)} />
+              <input aria-label={t("signature.activationEvidence")} placeholder={t("signature.activationEvidence")} value={activationEvidence} onChange={(e) => setActivationEvidence(e.target.value)} />
+              <Button
               variant="primary"
               size="sm"
               onClick={async () => {
-                const reason = window.prompt(t("signature.activationReason"));
-                const evidence = reason ? window.prompt(t("signature.activationEvidence")) : null;
-                if (!reason?.trim() || !evidence?.trim()) return;
+                if (!activationReason.trim() || !activationEvidence.trim()) { toast.error(t("signature.activationReason")); return; }
                 setBusy(true);
                 try {
-                  await activateSignatureRequest(req.id, reason.trim(), evidence.trim());
+                  await activateSignatureRequest(req.id, activationReason.trim(), activationEvidence.trim());
                   setActivated(true);
                   load();
                 } catch {
@@ -159,7 +166,8 @@ export default function SignaturePanel({
             >
               {t("signature.activate")}
             </Button>
-            }
+              </div>
+            )}
             <Button
               variant="secondary"
               size="sm"

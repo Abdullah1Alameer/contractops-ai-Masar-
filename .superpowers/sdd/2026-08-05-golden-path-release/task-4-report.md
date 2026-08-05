@@ -184,3 +184,31 @@ pytest tests/test_signature_lifecycle_integration.py tests/test_signature.py tes
 npm test && npx tsc --noEmit
 20 frontend tests passed; TypeScript passed
 ```
+
+## Fix round 3
+
+- Activation API coverage now asserts service/router error payloads for whitespace
+  reason/evidence and unauthorized roles, and verifies exactly one activation event.
+- Replaced browser prompts with inline cancellation and activation fields. Activation is
+  restricted to completed requests on a `signed` contract stage and hides locally after
+  success.
+- Added persisted current-version unresolved-negotiation creation blocking coverage.
+
+### TDD evidence
+
+RED:
+
+```text
+pytest tests/test_signature_lifecycle_integration.py::test_manual_activation_requires_authorized_evidence_and_moves_signed_contract -q
+FAILED: expected one contract_activated event, found two
+```
+
+GREEN:
+
+```text
+pytest tests/test_signature_lifecycle_integration.py tests/test_signature.py tests/test_lifecycle.py tests/test_approval_lifecycle_integration.py tests/test_outbound_messages.py -q
+103 passed, 7 warnings
+
+npx tsc --noEmit && npm test
+TypeScript passed; 20 frontend tests passed
+```

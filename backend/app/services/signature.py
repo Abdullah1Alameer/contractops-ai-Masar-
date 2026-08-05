@@ -759,8 +759,6 @@ def activate_contract(request_id, db: Session, *, actor: str, reason: str | None
             _raise(409, "activation_not_ready")
         _transition(db, contract, req, version, LifecycleEvent.CONTRACT_ACTIVATED, actor=actor,
                     metadata={"activation_ready": True, "reason": reason.strip(), "evidence": evidence.strip()})
-        log_activity(db, contract.id, "contract_activated", actor=actor,
-                     metadata={"request_id": str(req.id), "reason_present": True, "evidence_present": True})
         _commit(db, contract)
     except Exception:
         db.rollback()

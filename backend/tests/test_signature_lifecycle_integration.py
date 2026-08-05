@@ -14,6 +14,7 @@ from app.models import (
     ApprovalWorkflow,
     Contract,
     ContractVersion,
+    Negotiation,
     OutboundMessage,
     SignatureRequest,
     SignatureSigner,
@@ -202,6 +203,31 @@ def test_creation_requires_ready_current_approved_version_and_completed_approval
     )
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == expected
+
+
+def test_creation_rejects_unresolved_current_version_negotiation_without_mutation(signature_db):
+    db, create_contract = signature_db
+    contract, version = create_contract()
+    db.add(Negotiation(
+        id=uuid4(), contract_id=contract.id, version_id=version.id, clause_ref="7.1",
+        reviewer_comment="Unresolved", reviewer_decision="changes_requested",
+        status="draft", workflow_status="pending_analysis",
+    ))
+    db.commit()
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/signature-request", headers=AUTH,
+        json={
+            "subject": "Please sign",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "signers": [{"name": "A", "email": "a@example.invalid", "order": 1}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "unresolved_negotiations"
+    assert db.query(SignatureRequest).filter_by(contract_id=contract.id).count() == 0
+    assert db.get(Contract, contract.id).stage == "ready_to_sign"
 
 
 def test_failed_delivery_preserves_request_link_and_retry_reuses_it(signature_db, monkeypatch):
@@ -455,7 +481,7 @@ def test_manual_activation_requires_authorized_evidence_and_moves_signed_contrac
     db.commit()
     client = TestClient(app)
 
-    missing = client.post(f"/api/signature-requests/{request.id}/activate", headers=AUTH, json={"reason": ""})
+    missing = client.post(f"/api/signature-requests/{request.id}/activate", headers=AUTH, json={"reason": " ", "evidence": " "})
     forbidden = client.post(
         f"/api/signature-requests/{request.id}/activate",
         headers={**AUTH, "X-Demo-Role": "finance"},
@@ -468,8 +494,11 @@ def test_manual_activation_requires_authorized_evidence_and_moves_signed_contrac
     )
 
     assert missing.status_code == 422
+    assert missing.json()["detail"]["error"] == "activation_reason_evidence_required"
     assert forbidden.status_code == 403
+    assert forbidden.json()["detail"]["error"] == "signature_activation_forbidden"
     assert activated.status_code == 200, activated.text
     db.expire_all()
     assert db.get(Contract, contract.id).stage == "active"
-    assert "contract_activated" in [event.event_type for event in _events(db, contract.id)]
+    event_names = [event.event_type for event in _events(db, contract.id)]
+    assert event_names.count("contract_activated") == 1
