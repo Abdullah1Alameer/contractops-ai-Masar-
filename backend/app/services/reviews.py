@@ -500,7 +500,7 @@ def build_review_dossier(contract_id, db: Session) -> dict:
 
 def build_email_template(req: ReviewRequest, contract: Contract, link: str) -> dict:
     title = contract.title or "Contract"
-    subject = f"Contract review request: {title}"
+    subject = "Contract review request from ContractOps AI"
     body = (
         f"Hello {req.recipient_name},\n\n"
         f"ContractOps AI has sent you a secure contract review request.\n\n"
@@ -607,10 +607,13 @@ def serialize_review_request(
 
 def _review_email_bodies(email: dict) -> tuple[str, str]:
     text_body = email["body"]
+    escaped_link = html.escape(email["review_link"], quote=True)
     html_body = (
         "<html><body><p>"
         + html.escape(text_body).replace("\n", "<br>")
-        + "</p></body></html>"
+        + '</p><p><a href="'
+        + escaped_link
+        + '">Review Contract</a></p></body></html>'
     )
     return text_body, html_body
 
@@ -692,9 +695,14 @@ def create_review_email(
 def resend_review_email(review_id, db: Session) -> dict:
     """Create a new attempt for an existing actionable review and reusable link."""
     try:
+        unlocked_req = db.get(ReviewRequest, review_id)
+        if unlocked_req is None:
+            _raise_review_error(404, "review_not_found")
+        contract = _lock_contract(unlocked_req.contract_id, db)
         req = _lock_review(review_id, db)
-        contract = _lock_contract(req.contract_id, db)
-        current = _locked_current_version(req.contract_id, db)
+        if req.contract_id != contract.id:
+            _raise_review_error(409, "workflow_stale")
+        current = _locked_current_version(contract.id, db)
         if _is_stale(req, current):
             _raise_review_error(409, "workflow_stale")
         if not can_respond(req):

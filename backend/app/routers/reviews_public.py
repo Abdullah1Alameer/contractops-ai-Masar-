@@ -36,8 +36,10 @@ class CommentBody(BaseModel):
 
 def _rate(request: Request, token: str) -> None:
     ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(f"review-ip:{ip}"):
+        raise HTTPException(429, detail={"error": "rate_limited"})
     token_digest = hash_token(token)
-    if not check_rate_limit(f"review:{ip}:{token_digest}"):
+    if not check_rate_limit(f"review-token:{ip}:{token_digest}"):
         raise HTTPException(429, detail={"error": "rate_limited"})
 
 

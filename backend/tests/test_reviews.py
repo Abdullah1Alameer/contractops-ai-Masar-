@@ -34,7 +34,7 @@ def test_can_respond_rejects_all_terminal_statuses():
         assert not rev.can_respond(SimpleNamespace(status=status))
 
 
-def test_build_email_template_includes_link():
+def test_build_email_template_uses_safe_subject_and_includes_link():
     req = SimpleNamespace(
         recipient_name="Client",
         message="Please review",
@@ -44,7 +44,8 @@ def test_build_email_template_includes_link():
     link = "http://localhost:3000/review/abc"
     email = rev.build_email_template(req, contract, link)
     assert link in email["body"]
-    assert "MSA 2026" in email["subject"]
+    assert email["subject"] == "Contract review request from ContractOps AI"
+    assert "MSA 2026" not in email["subject"]
     assert email["review_link"] == link
 
 
