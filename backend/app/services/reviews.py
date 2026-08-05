@@ -10,23 +10,44 @@ from sqlalchemy.orm import Session
 
 from ..config import REVIEW_BASE_URL
 from ..models import (
+    ActivityEvent,
     Clause,
     Contract,
+    ContractVersion,
     Extraction,
     FlowdownFinding,
+    Negotiation,
     Obligation,
     ReviewComment,
     ReviewRequest,
     ReviewResponse,
 )
+from . import approvals
 from .deadlines import deadline_summary, list_deadlines_for_contract
 from .flowdown import list_flowdown_for_pair
+from .lifecycle import LifecycleEvent, LifecycleService, TransitionResult
 from .payments import list_payment_milestones_for_contract, payments_summary
 from . import versions as ver_svc
 
 DEFAULT_EXPIRY_DAYS = 14
 _DECISION_STATUSES = frozenset({"approved", "rejected", "changes_requested"})
-_TERMINAL_STATUSES = _DECISION_STATUSES | frozenset({"expired"})
+_ACTIONABLE_STATUSES = frozenset({"sent", "opened"})
+_TERMINAL_STATUSES = _DECISION_STATUSES | frozenset({"expired", "cancelled"})
+_USABLE_CONTRACT_STATUSES = frozenset({"ready", "needs_review"})
+_INITIAL_REVIEW = "initial"
+_NEGOTIATION_FOLLOWUP = "negotiation_followup"
+
+
+class ReviewError(ValueError):
+    def __init__(self, status_code: int, code: str, **payload):
+        self.status_code = status_code
+        self.code = code
+        self.payload = {"error": code, **payload}
+        super().__init__(code)
+
+
+def _raise_review_error(status_code: int, code: str, **payload) -> None:
+    raise ReviewError(status_code, code, **payload)
 
 
 def generate_token() -> str:
@@ -45,6 +66,136 @@ def _num(v):
     return float(v) if v is not None else None
 
 
+def _lock_contract(contract_id, db: Session) -> Contract:
+    contract = (
+        db.query(Contract)
+        .filter(Contract.id == contract_id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if contract is None:
+        _raise_review_error(404, "review_not_found")
+    return contract
+
+
+def _lock_review(review_id, db: Session) -> ReviewRequest:
+    req = (
+        db.query(ReviewRequest)
+        .filter(ReviewRequest.id == review_id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if req is None:
+        _raise_review_error(404, "review_not_found")
+    return req
+
+
+def _locked_current_version(contract_id, db: Session) -> ContractVersion | None:
+    versions = (
+        db.query(ContractVersion)
+        .filter(ContractVersion.contract_id == contract_id)
+        .with_for_update()
+        .order_by(ContractVersion.version_number.desc())
+        .all()
+    )
+    return next((version for version in versions if version.is_current), None)
+
+
+def _is_stale(req: ReviewRequest, current: ContractVersion | None) -> bool:
+    return current is None or req.version_id is None or str(req.version_id) != str(current.id)
+
+
+def _is_negotiation_followup(req: ReviewRequest, db: Session) -> bool:
+    return (
+        db.query(Negotiation.id)
+        .filter(Negotiation.sent_review_request_id == req.id)
+        .first()
+        is not None
+    )
+
+
+def _activity_metadata(
+    req: ReviewRequest,
+    version: ContractVersion,
+    *,
+    actor_type: str,
+) -> dict:
+    return {
+        "review_id": str(req.id),
+        "review_request_id": str(req.id),
+        "version_id": str(version.id),
+        "version_number": version.version_number,
+        "actor_type": actor_type,
+    }
+
+
+def _log_review_transition(
+    db: Session,
+    *,
+    contract: Contract,
+    req: ReviewRequest,
+    version: ContractVersion,
+    workflow_event: LifecycleEvent,
+    actor: str,
+    actor_type: str,
+    transition: TransitionResult | None,
+    comment: str | None = None,
+) -> None:
+    metadata = _activity_metadata(req, version, actor_type=actor_type)
+    approvals.log_activity(
+        db,
+        contract.id,
+        workflow_event.value,
+        actor=actor,
+        comment=comment,
+        metadata=metadata,
+    )
+    if transition is None or not transition.changed:
+        return
+    approvals.log_activity(
+        db,
+        contract.id,
+        transition.activity_event.value,
+        actor=actor,
+        metadata={**metadata, **transition.activity_metadata},
+    )
+
+
+def _transition_review(
+    contract: Contract,
+    req: ReviewRequest,
+    version: ContractVersion,
+    event: LifecycleEvent,
+    *,
+    actor: str,
+    actor_type: str,
+    metadata: dict | None = None,
+) -> TransitionResult:
+    return LifecycleService.transition(
+        contract=contract,
+        event=event,
+        actor=actor,
+        metadata={
+            **_activity_metadata(req, version, actor_type=actor_type),
+            "current_version": True,
+            "active_review": req.status in _ACTIONABLE_STATUSES,
+            **(metadata or {}),
+        },
+    )
+
+
+def _commit(db: Session, *refresh_rows) -> None:
+    try:
+        db.commit()
+        for row in refresh_rows:
+            db.refresh(row)
+    except Exception:
+        db.rollback()
+        raise
+
+
 def review_link(token: str) -> str:
     base = REVIEW_BASE_URL.rstrip("/")
     return f"{base}/review/{token}"
@@ -58,34 +209,83 @@ def expire_if_needed(req: ReviewRequest, db: Session) -> ReviewRequest:
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=timezone.utc)
         if exp < _utcnow():
-            req.status = "expired"
-            db.commit()
-            db.refresh(req)
+            try:
+                req = _lock_review(req.id, db)
+                contract = _lock_contract(req.contract_id, db)
+                current = _locked_current_version(req.contract_id, db)
+                if req.status in _TERMINAL_STATUSES or _is_stale(req, current):
+                    db.rollback()
+                    return req
+                is_followup = _is_negotiation_followup(req, db)
+                transition = None
+                if not is_followup:
+                    transition = _transition_review(
+                        contract,
+                        req,
+                        current,
+                        LifecycleEvent.REVIEW_EXPIRED,
+                        actor="system",
+                        actor_type="system",
+                    )
+                req.status = "expired"
+                _log_review_transition(
+                    db,
+                    contract=contract,
+                    req=req,
+                    version=current,
+                    workflow_event=LifecycleEvent.REVIEW_EXPIRED,
+                    actor="system",
+                    actor_type="system",
+                    transition=transition,
+                )
+                _commit(db, req, contract)
+            except Exception:
+                db.rollback()
+                raise
     return req
 
 
 def can_respond(req: ReviewRequest) -> bool:
-    return req.status in ("sent", "opened")
+    return req.status in _ACTIONABLE_STATUSES
 
 
 def mark_opened(req: ReviewRequest, db: Session) -> None:
-    if req.status == "sent":
+    if req.status != "sent":
+        return
+    try:
+        req = _lock_review(req.id, db)
+        contract = _lock_contract(req.contract_id, db)
+        current = _locked_current_version(req.contract_id, db)
+        if req.status != "sent" or _is_stale(req, current):
+            db.rollback()
+            return
+        is_followup = _is_negotiation_followup(req, db)
+        transition = None
+        if not is_followup:
+            transition = _transition_review(
+                contract,
+                req,
+                current,
+                LifecycleEvent.REVIEW_OPENED,
+                actor="client",
+                actor_type="client",
+            )
         req.status = "opened"
         req.opened_at = _utcnow()
-        db.commit()
-        from .approvals import log_activity
-        from .versions import current_version
-
-        cur = current_version(req.contract_id, db)
-        log_activity(
+        _log_review_transition(
             db,
-            req.contract_id,
-            "review_opened",
-            metadata={
-                "version_number": cur.version_number if cur else None,
-                "review_request_id": str(req.id),
-            },
+            contract=contract,
+            req=req,
+            version=current,
+            workflow_event=LifecycleEvent.REVIEW_OPENED,
+            actor="client",
+            actor_type="client",
+            transition=transition,
         )
+        _commit(db, req, contract)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _contract_brief(c: Contract) -> dict:
@@ -295,6 +495,12 @@ def serialize_review_request(req: ReviewRequest, db: Session, *, include_token: 
         .all()
     )
     response = db.query(ReviewResponse).filter_by(review_request_id=req.id).first()
+    contract = db.get(Contract, req.contract_id)
+    is_stale = _is_stale(req, ver_svc.current_version(req.contract_id, db))
+    actionable = can_respond(req) and not is_stale
+    next_allowed_actions = (
+        ["comment", "approve", "reject", "request_changes"] if actionable else []
+    )
     out = {
         "id": str(req.id),
         "contract_id": str(req.contract_id),
@@ -321,7 +527,15 @@ def serialize_review_request(req: ReviewRequest, db: Session, *, include_token: 
         "decision": response.decision if response else None,
         "overall_comment": response.overall_comment if response else None,
         "version_id": str(req.version_id) if req.version_id else None,
-        "is_stale": ver_svc.is_stale_workflow(req, req.contract_id, db),
+        "is_stale": is_stale,
+        "contract_stage": contract.stage if contract else None,
+        "actionable": actionable,
+        "terminal_decision": (
+            response.decision
+            if response
+            else req.status if req.status in _TERMINAL_STATUSES else None
+        ),
+        "next_allowed_actions": next_allowed_actions,
     }
     if include_token:
         out["token"] = req.token
@@ -333,52 +547,97 @@ def create_review_request(
     contract: Contract,
     db: Session,
     *,
+    actor: str,
     recipient_name: str,
     recipient_email: str,
     message: str | None = None,
     sender_name: str | None = None,
     sender_email: str | None = None,
     expires_in_days: int = DEFAULT_EXPIRY_DAYS,
+    review_context: str = _INITIAL_REVIEW,
 ) -> ReviewRequest:
-    if contract.status not in ("ready", "needs_review"):
-        raise ValueError("extraction_not_complete")
-    if contract.supported is False:
-        raise ValueError("contract_not_supported")
+    if review_context not in {_INITIAL_REVIEW, _NEGOTIATION_FOLLOWUP}:
+        _raise_review_error(422, "invalid_transition_payload")
+    clean_name = recipient_name.strip()
+    clean_email = recipient_email.strip()
+    if not clean_name or "@" not in clean_email:
+        _raise_review_error(422, "invalid_transition_payload")
 
-    token = generate_token()
-    while db.query(ReviewRequest).filter_by(token=token).first():
+    try:
+        contract = _lock_contract(contract.id, db)
+        current = _locked_current_version(contract.id, db)
+        if (
+            contract.status not in _USABLE_CONTRACT_STATUSES
+            or contract.supported is False
+            or current is None
+        ):
+            _raise_review_error(409, "contract_not_ready")
+
+        active = (
+            db.query(ReviewRequest)
+            .filter(
+                ReviewRequest.contract_id == contract.id,
+                ReviewRequest.version_id == current.id,
+                ReviewRequest.status.in_(_ACTIONABLE_STATUSES),
+            )
+            .with_for_update()
+            .first()
+        )
+        if active is not None:
+            _raise_review_error(409, "review_already_active")
+
         token = generate_token()
+        while db.query(ReviewRequest).filter_by(token=token).first():
+            token = generate_token()
 
-    req = ReviewRequest(
-        id=uuid.uuid4(),
-        contract_id=contract.id,
-        token=token,
-        recipient_name=recipient_name.strip(),
-        recipient_email=recipient_email.strip(),
-        sender_name=sender_name,
-        sender_email=sender_email,
-        message=message,
-        status="sent",
-        expires_at=_utcnow() + timedelta(days=max(1, min(expires_in_days, 90))),
-    )
-    db.add(req)
-    from .approvals import log_activity
-    from .versions import current_version
+        req = ReviewRequest(
+            id=uuid.uuid4(),
+            contract_id=contract.id,
+            version_id=current.id,
+            token=token,
+            recipient_name=clean_name,
+            recipient_email=clean_email,
+            sender_name=sender_name,
+            sender_email=sender_email,
+            message=message,
+            status="sent",
+            expires_at=_utcnow() + timedelta(days=max(1, min(expires_in_days, 90))),
+        )
+        db.add(req)
 
-    cur = current_version(contract.id, db)
-    if cur:
-        req.version_id = cur.id
-        log_activity(db, contract.id, "version_sent_for_review", metadata={"version_number": cur.version_number})
-        log_activity(
+        transition = None
+        if review_context == _INITIAL_REVIEW:
+            transition = _transition_review(
+                contract,
+                req,
+                current,
+                LifecycleEvent.REVIEW_SENT,
+                actor=actor,
+                actor_type="internal",
+                metadata={"active_review": False},
+            )
+        approvals.log_activity(
             db,
             contract.id,
-            "review_sent",
-            actor=sender_name,
-            metadata={"version_number": cur.version_number, "review_request_id": str(req.id)},
+            "version_sent_for_review",
+            actor=actor,
+            metadata=_activity_metadata(req, current, actor_type="internal"),
         )
-    db.commit()
-    db.refresh(req)
-    return req
+        _log_review_transition(
+            db,
+            contract=contract,
+            req=req,
+            version=current,
+            workflow_event=LifecycleEvent.REVIEW_SENT,
+            actor=actor,
+            actor_type="internal",
+            transition=transition,
+        )
+        _commit(db, req, contract)
+        return req
+    except Exception:
+        db.rollback()
+        raise
 
 
 def get_request_by_token(token: str, db: Session) -> ReviewRequest | None:
@@ -400,7 +659,12 @@ def build_public_payload(req: ReviewRequest, db: Session) -> dict:
         "comments": serialized["comments"],
         "decision": serialized["decision"],
         "overall_comment": serialized["overall_comment"],
-        "read_only": not can_respond(req),
+        "contract_stage": serialized["contract_stage"],
+        "actionable": serialized["actionable"],
+        "is_stale": serialized["is_stale"],
+        "terminal_decision": serialized["terminal_decision"],
+        "next_allowed_actions": serialized["next_allowed_actions"],
+        "read_only": not serialized["actionable"],
     }
 
 
@@ -409,51 +673,163 @@ def record_decision(
     db: Session,
     decision: str,
     overall_comment: str | None = None,
+    *,
+    actor: str = "client",
 ) -> ReviewRequest:
     expire_if_needed(req, db)
-    if not can_respond(req):
-        raise ValueError("review_closed")
     if decision not in ("approve", "reject", "changes_requested"):
-        raise ValueError("invalid_decision")
-    if db.query(ReviewResponse).filter_by(review_request_id=req.id).first():
-        raise ValueError("review_closed")
+        _raise_review_error(422, "invalid_transition_payload")
+    clean_comment = overall_comment.strip() if overall_comment else None
 
-    status_map = {
-        "approve": "approved",
-        "reject": "rejected",
-        "changes_requested": "changes_requested",
-    }
-    db.add(
-        ReviewResponse(
-            id=uuid.uuid4(),
-            review_request_id=req.id,
-            decision=decision,
-            overall_comment=overall_comment,
+    try:
+        req = _lock_review(req.id, db)
+        contract = _lock_contract(req.contract_id, db)
+        current = _locked_current_version(req.contract_id, db)
+        if _is_stale(req, current):
+            _raise_review_error(409, "workflow_stale")
+        if not can_respond(req):
+            _raise_review_error(409, "review_closed")
+        if db.query(ReviewResponse).filter_by(review_request_id=req.id).first():
+            _raise_review_error(409, "review_closed")
+        if decision == "reject" and not clean_comment:
+            _raise_review_error(422, "review_reason_required")
+
+        source_comment = (
+            db.query(ReviewComment)
+            .filter_by(review_request_id=req.id)
+            .order_by(ReviewComment.created_at.asc(), ReviewComment.id.asc())
+            .first()
         )
-    )
-    req.status = status_map[decision]
-    req.responded_at = _utcnow()
-    from .approvals import log_activity
-    from .versions import current_version
+        if decision == "changes_requested" and not clean_comment and source_comment is None:
+            _raise_review_error(422, "change_request_required")
 
-    cur = current_version(req.contract_id, db)
-    event_map = {
-        "approved": "review_approved",
-        "rejected": "review_rejected",
-        "changes_requested": "review_changes_requested",
-    }
-    log_activity(
-        db,
-        req.contract_id,
-        event_map.get(req.status, "review_completed"),
-        metadata={
-            "version_number": cur.version_number if cur else None,
-            "review_request_id": str(req.id),
-        },
-    )
-    db.commit()
-    db.refresh(req)
-    return req
+        status_map = {
+            "approve": "approved",
+            "reject": "rejected",
+            "changes_requested": "changes_requested",
+        }
+        event_map = {
+            "approve": LifecycleEvent.REVIEW_APPROVED,
+            "reject": LifecycleEvent.REVIEW_REJECTED,
+            "changes_requested": LifecycleEvent.REVIEW_CHANGES_REQUESTED,
+        }
+        db.add(
+            ReviewResponse(
+                id=uuid.uuid4(),
+                review_request_id=req.id,
+                decision=decision,
+                overall_comment=clean_comment,
+            )
+        )
+
+        is_followup = _is_negotiation_followup(req, db)
+        transition = None
+        if not is_followup:
+            transition = _transition_review(
+                contract,
+                req,
+                current,
+                event_map[decision],
+                actor=actor,
+                actor_type="client",
+            )
+
+        req.status = status_map[decision]
+        req.responded_at = _utcnow()
+        negotiation_created = False
+        if decision == "changes_requested" and not is_followup:
+            existing = (
+                db.query(Negotiation)
+                .filter_by(review_request_id=req.id, review_comment_id=None)
+                .first()
+            )
+            if existing is None:
+                negotiation = Negotiation(
+                    id=uuid.uuid4(),
+                    contract_id=req.contract_id,
+                    version_id=current.id,
+                    review_request_id=req.id,
+                    review_comment_id=None,
+                    reviewer_comment=clean_comment or source_comment.comment,
+                    reviewer_decision="changes_requested",
+                    status="draft",
+                    workflow_status="pending_analysis",
+                )
+                db.add(negotiation)
+                negotiation_created = True
+
+        _log_review_transition(
+            db,
+            contract=contract,
+            req=req,
+            version=current,
+            workflow_event=event_map[decision],
+            actor=actor,
+            actor_type="client",
+            transition=transition,
+        )
+        if negotiation_created:
+            approvals.log_activity(
+                db,
+                contract.id,
+                "negotiation_analysis_requested",
+                actor=actor,
+                metadata=_activity_metadata(req, current, actor_type="client"),
+            )
+        _commit(db, req, contract)
+        return req
+    except Exception:
+        db.rollback()
+        raise
+
+
+def cancel_review(
+    req: ReviewRequest,
+    db: Session,
+    *,
+    actor: str,
+    reason: str,
+) -> ReviewRequest:
+    clean_reason = reason.strip()
+    if not clean_reason:
+        _raise_review_error(422, "review_reason_required")
+    try:
+        req = _lock_review(req.id, db)
+        contract = _lock_contract(req.contract_id, db)
+        current = _locked_current_version(req.contract_id, db)
+        if _is_stale(req, current):
+            _raise_review_error(409, "workflow_stale")
+        if not can_respond(req):
+            _raise_review_error(409, "review_closed")
+
+        is_followup = _is_negotiation_followup(req, db)
+        transition = None
+        if not is_followup:
+            transition = _transition_review(
+                contract,
+                req,
+                current,
+                LifecycleEvent.REVIEW_CANCELLED,
+                actor=actor,
+                actor_type="internal",
+            )
+        req.status = "cancelled"
+        _log_review_transition(
+            db,
+            contract=contract,
+            req=req,
+            version=current,
+            workflow_event=LifecycleEvent.REVIEW_CANCELLED,
+            actor=actor,
+            actor_type="internal",
+            transition=transition,
+            comment=clean_reason,
+        )
+        _commit(db, req, contract)
+        return req
+    except Exception:
+        db.rollback()
+        raise
 
 
 def add_comment(
@@ -464,22 +840,27 @@ def add_comment(
     page: int | None = None,
 ) -> ReviewComment:
     expire_if_needed(req, db)
-    if req.status == "expired":
-        raise ValueError("review_expired")
-    if req.status in _DECISION_STATUSES:
-        raise ValueError("review_closed")
-
-    cm = ReviewComment(
-        id=uuid.uuid4(),
-        review_request_id=req.id,
-        clause_ref=clause_ref,
-        page=page,
-        comment=comment.strip(),
-    )
-    db.add(cm)
-    db.commit()
-    db.refresh(cm)
-    return cm
+    try:
+        req = _lock_review(req.id, db)
+        _lock_contract(req.contract_id, db)
+        current = _locked_current_version(req.contract_id, db)
+        if _is_stale(req, current):
+            _raise_review_error(409, "workflow_stale")
+        if not can_respond(req):
+            _raise_review_error(409, "review_closed")
+        cm = ReviewComment(
+            id=uuid.uuid4(),
+            review_request_id=req.id,
+            clause_ref=clause_ref,
+            page=page,
+            comment=comment.strip(),
+        )
+        db.add(cm)
+        _commit(db, cm)
+        return cm
+    except Exception:
+        db.rollback()
+        raise
 
 
 def list_reviews_for_contract(contract_id, db: Session) -> list[dict]:

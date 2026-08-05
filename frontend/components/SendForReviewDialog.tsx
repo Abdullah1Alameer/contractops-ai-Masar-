@@ -4,7 +4,7 @@ import { useState } from "react";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
-import { sendContractForReview } from "@/lib/api";
+import { apiErrorCode, sendContractForReview } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { SendReviewResponse } from "@/lib/types";
 
@@ -28,7 +28,7 @@ export default function SendForReviewDialog({
   const [senderEmail, setSenderEmail] = useState("");
   const [expiresIn, setExpiresIn] = useState(14);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SendReviewResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -38,12 +38,12 @@ export default function SendForReviewDialog({
     setRecipientEmail("");
     setMessage("");
     setCopied(false);
-    setError(false);
+    setError(null);
   };
 
   const submit = async () => {
     setBusy(true);
-    setError(false);
+    setError(null);
     try {
       const res = await sendContractForReview(contractId, {
         recipient_name: recipientName,
@@ -55,8 +55,8 @@ export default function SendForReviewDialog({
       });
       setResult(res);
       onSent?.();
-    } catch {
-      setError(true);
+    } catch (caught) {
+      setError(apiErrorCode(caught));
     } finally {
       setBusy(false);
     }
@@ -159,7 +159,7 @@ export default function SendForReviewDialog({
                 />
               </label>
             </div>
-            {error && <p className="text-sm text-danger-600">{t("common.error")}</p>}
+            {error && <p className="text-sm text-danger-600">{error}</p>}
             <div className="flex gap-2">
               <Button
                 variant="primary"
@@ -191,7 +191,7 @@ export function ReviewStatusBadge({ status }: { status: string }) {
         ? "danger"
         : status === "changes_requested"
           ? "warning"
-          : status === "expired"
+          : status === "expired" || status === "cancelled"
             ? "neutral"
             : "info";
   return <Badge tone={tone}>{t(key)}</Badge>;

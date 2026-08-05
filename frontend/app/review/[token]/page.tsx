@@ -12,6 +12,7 @@ import DualDate from "@/components/DualDate";
 import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import { useToast } from "@/components/feedback/ToastProvider";
 import {
+  apiErrorCode,
   fetchReviewPortal,
   reviewAddComment,
   reviewApprove,
@@ -33,7 +34,7 @@ export default function ReviewPortalPage() {
 
   const [data, setData] = useState<ReviewPortalPayload | null>(null);
   const [tab, setTab] = useState<Tab>("summary");
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [clauseRef, setClauseRef] = useState("");
   const [clauseComment, setClauseComment] = useState("");
@@ -43,10 +44,10 @@ export default function ReviewPortalPage() {
   const [showChanges, setShowChanges] = useState(false);
 
   const load = useCallback(() => {
-    setError(false);
+    setError(null);
     fetchReviewPortal(token)
       .then(setData)
-      .catch(() => setError(true));
+      .catch((caught) => setError(apiErrorCode(caught)));
   }, [token]);
 
   useEffect(load, [load]);
@@ -74,8 +75,8 @@ export default function ReviewPortalPage() {
           await reviewApprove(token);
           toastSuccess(t("review.portal.thanks"));
           load();
-        } catch {
-          toastError(t("common.error"));
+        } catch (caught) {
+          toastError(apiErrorCode(caught, t("common.error")));
           throw new Error("approve failed");
         } finally {
           setBusy(false);
@@ -92,8 +93,8 @@ export default function ReviewPortalPage() {
       toastSuccess(t("review.portal.thanks"));
       setShowReject(false);
       load();
-    } catch {
-      toastError(t("common.error"));
+    } catch (caught) {
+      toastError(apiErrorCode(caught, t("common.error")));
     } finally {
       setBusy(false);
     }
@@ -107,8 +108,8 @@ export default function ReviewPortalPage() {
       toastSuccess(t("review.portal.thanks"));
       setShowChanges(false);
       load();
-    } catch {
-      toastError(t("common.error"));
+    } catch (caught) {
+      toastError(apiErrorCode(caught, t("common.error")));
     } finally {
       setBusy(false);
     }
@@ -126,8 +127,8 @@ export default function ReviewPortalPage() {
       setClauseComment("");
       setClauseRef("");
       load();
-    } catch {
-      toastError(t("common.error"));
+    } catch (caught) {
+      toastError(apiErrorCode(caught, t("common.error")));
     } finally {
       setBusy(false);
     }
@@ -137,7 +138,7 @@ export default function ReviewPortalPage() {
     return (
       <Card>
         <CardBody className="text-center">
-          <p className="text-danger-600">{t("common.error")}</p>
+          <p className="text-danger-600">{error}</p>
           <Button variant="secondary" className="mt-3" onClick={load}>
             {t("common.retry")}
           </Button>

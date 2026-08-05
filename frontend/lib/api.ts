@@ -13,6 +13,10 @@ export class ApiError extends Error {
   }
 }
 
+export function apiErrorCode(error: unknown, fallback = "unknown"): string {
+  return error instanceof ApiError ? error.code : fallback;
+}
+
 async function parseError(res: Response): Promise<never> {
   let code = "unknown";
   try {

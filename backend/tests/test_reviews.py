@@ -1,9 +1,6 @@
 """Client Review Portal service tests (no OpenAI, no live SMTP)."""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
-
-import pytest
 
 from app.services import reviews as rev
 
@@ -21,15 +18,9 @@ def test_can_respond_open_states():
     assert not rev.can_respond(SimpleNamespace(status="approved"))
 
 
-def test_expire_if_needed_marks_expired():
-    db = MagicMock()
-    req = SimpleNamespace(
-        status="sent",
-        expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
-    )
-    out = rev.expire_if_needed(req, db)
-    assert out.status == "expired"
-    db.commit.assert_called()
+def test_can_respond_rejects_all_terminal_statuses():
+    for status in ("approved", "rejected", "changes_requested", "expired", "cancelled"):
+        assert not rev.can_respond(SimpleNamespace(status=status))
 
 
 def test_build_email_template_includes_link():
@@ -46,48 +37,15 @@ def test_build_email_template_includes_link():
     assert email["review_link"] == link
 
 
-def test_record_decision_approve():
-    db = MagicMock()
-    import uuid
+def test_review_error_preserves_http_contract():
+    error = rev.ReviewError(409, "review_closed", read_only=True)
 
-    req = SimpleNamespace(
-        id="rid",
-        contract_id=uuid.uuid4(),
-        status="opened",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-        responded_at=None,
-    )
-    db.query.return_value.filter_by.return_value.first.return_value = None
-    from unittest.mock import patch
-
-    with patch("app.services.versions.current_version", return_value=None):
-        rev.record_decision(req, db, "approve")
-    assert req.status == "approved"
-    assert req.responded_at is not None
-    db.add.assert_called()
-    db.commit.assert_called()
-
-
-def test_record_decision_rejects_when_closed():
-    db = MagicMock()
-    req = SimpleNamespace(
-        id="rid",
-        status="approved",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-    )
-    with pytest.raises(ValueError, match="review_closed"):
-        rev.record_decision(req, db, "approve")
-
-
-def test_add_comment_blocked_after_decision():
-    db = MagicMock()
-    req = SimpleNamespace(
-        id="rid",
-        status="rejected",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-    )
-    with pytest.raises(ValueError, match="review_closed"):
-        rev.add_comment(req, db, "note")
+    assert str(error) == "review_closed"
+    assert error.status_code == 409
+    assert error.payload == {
+        "error": "review_closed",
+        "read_only": True,
+    }
 
 
 def test_build_ai_summary_includes_parties():

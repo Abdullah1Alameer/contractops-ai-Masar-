@@ -8,7 +8,8 @@ export type WorkflowReviewStatus =
   | "approved"
   | "rejected"
   | "changes_requested"
-  | "expired";
+  | "expired"
+  | "cancelled";
 
 export type WorkflowNegotiationStatus =
   | "pending_analysis"
@@ -426,6 +427,10 @@ export interface ReviewRequestRow {
   contract_title?: string;
   version_id?: string | null;
   is_stale?: boolean;
+  contract_stage?: string | null;
+  actionable?: boolean;
+  terminal_decision?: string | null;
+  next_allowed_actions?: string[];
 }
 
 export interface SendReviewResponse {
@@ -472,6 +477,11 @@ export interface ReviewPortalPayload {
   decision: string | null;
   overall_comment: string | null;
   read_only: boolean;
+  contract_stage: string | null;
+  actionable: boolean;
+  is_stale: boolean;
+  terminal_decision: string | null;
+  next_allowed_actions: string[];
 }
 
 export interface NegotiationRow {

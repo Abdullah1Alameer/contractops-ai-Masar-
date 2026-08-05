@@ -377,11 +377,13 @@ def send_updated(neg: Negotiation, db: Session) -> dict:
     new_req = create_review_request(
         contract,
         db,
+        actor=review.sender_name if review and review.sender_name else "legal",
         recipient_name=review.recipient_name if review else "Client",
         recipient_email=review.recipient_email if review else "client@example.com",
         message="\n\n".join(msg_parts),
         sender_name=review.sender_name if review else None,
         sender_email=review.sender_email if review else None,
+        review_context="negotiation_followup",
     )
     neg.sent_review_request_id = new_req.id
     neg.status = "sent"

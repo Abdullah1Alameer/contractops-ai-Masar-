@@ -109,6 +109,11 @@ def test_public_review_payload_no_approval_keys():
                         "responded_at": None,
                         "decision": None,
                         "overall_comment": None,
+                        "contract_stage": "client_review",
+                        "actionable": True,
+                        "is_stale": False,
+                        "terminal_decision": None,
+                        "next_allowed_actions": ["approve", "reject", "request_changes"],
                     },
                 ):
                     payload = build_public_payload(req, db)

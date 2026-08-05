@@ -6,9 +6,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Contract
+from ..deps import demo_role
+from ..models import Contract, ReviewRequest
+from ..services.lifecycle import LifecycleError
 from ..services.reviews import (
+    ReviewError,
     build_email_template,
+    cancel_review,
     create_review_request,
     list_reviews_for_contract,
     review_link,
@@ -28,15 +32,31 @@ class SendReviewBody(BaseModel):
     expires_in_days: int = Field(default=14, ge=1, le=90)
 
 
+class CancelReviewBody(BaseModel):
+    reason: str
+
+
+def _review_http_error(error: Exception):
+    if isinstance(error, (ReviewError, LifecycleError)):
+        raise HTTPException(error.status_code, detail=error.payload)
+    raise error
+
+
 @router.post("/contracts/{contract_id}/review/send")
-def send_for_review(contract_id: _uuid.UUID, body: SendReviewBody, db: Session = Depends(get_db)):
+def send_for_review(
+    contract_id: _uuid.UUID,
+    body: SendReviewBody,
+    db: Session = Depends(get_db),
+    actor: str = Depends(demo_role),
+):
     contract = db.get(Contract, contract_id)
     if contract is None:
-        raise HTTPException(404, detail={"error": "not_found"})
+        raise HTTPException(404, detail={"error": "review_not_found"})
     try:
         req = create_review_request(
             contract,
             db,
+            actor=actor,
             recipient_name=body.recipient_name,
             recipient_email=body.recipient_email,
             message=body.message,
@@ -44,13 +64,8 @@ def send_for_review(contract_id: _uuid.UUID, body: SendReviewBody, db: Session =
             sender_email=body.sender_email,
             expires_in_days=body.expires_in_days,
         )
-    except ValueError as e:
-        code = str(e)
-        if code == "extraction_not_complete":
-            raise HTTPException(409, detail={"error": code})
-        if code == "contract_not_supported":
-            raise HTTPException(422, detail={"error": code})
-        raise HTTPException(400, detail={"error": code})
+    except (ReviewError, LifecycleError) as error:
+        _review_http_error(error)
 
     link = review_link(req.token)
     email = build_email_template(req, contract, link)
@@ -61,10 +76,28 @@ def send_for_review(contract_id: _uuid.UUID, body: SendReviewBody, db: Session =
     }
 
 
+@router.post("/contracts/{contract_id}/reviews/{review_id}/cancel")
+def cancel_contract_review(
+    contract_id: _uuid.UUID,
+    review_id: _uuid.UUID,
+    body: CancelReviewBody,
+    db: Session = Depends(get_db),
+    actor: str = Depends(demo_role),
+):
+    req = db.get(ReviewRequest, review_id)
+    if req is None or req.contract_id != contract_id:
+        raise HTTPException(404, detail={"error": "review_not_found"})
+    try:
+        cancel_review(req, db, actor=actor, reason=body.reason)
+    except (ReviewError, LifecycleError) as error:
+        _review_http_error(error)
+    return serialize_review_request(req, db)
+
+
 @router.get("/contracts/{contract_id}/reviews")
 def contract_review_history(contract_id: _uuid.UUID, db: Session = Depends(get_db)):
     if db.get(Contract, contract_id) is None:
-        raise HTTPException(404, detail={"error": "not_found"})
+        raise HTTPException(404, detail={"error": "review_not_found"})
     return list_reviews_for_contract(contract_id, db)
 
 
