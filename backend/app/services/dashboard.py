@@ -14,6 +14,7 @@ from ..models import (
     ContractVersion,
     Deadline,
     Extraction,
+    Negotiation,
     Obligation,
     PaymentMilestone,
     ReviewRequest,
@@ -279,16 +280,21 @@ def build_dashboard_summary(db: Session) -> dict:
 
 
 def workflow_summaries_by_contract(db: Session) -> dict:
-    """Latest review / approval / signature status per contract (bulk)."""
+    """Canonical latest workflow statuses per contract using bulk queries."""
     out: dict = {}
 
     def ensure(cid):
         if cid not in out:
-            out[cid] = {"review_status": None, "approval_status": None, "signature_status": None}
+            out[cid] = {
+                "review_status": None,
+                "negotiation_status": None,
+                "approval_status": None,
+                "signature_status": None,
+            }
 
     review_rows = (
         db.query(ReviewRequest)
-        .order_by(ReviewRequest.contract_id, ReviewRequest.created_at.desc())
+        .order_by(ReviewRequest.contract_id, ReviewRequest.created_at.desc(), ReviewRequest.id.desc())
         .all()
     )
     seen_review: set = set()
@@ -299,9 +305,30 @@ def workflow_summaries_by_contract(db: Session) -> dict:
         ensure(r.contract_id)
         out[r.contract_id]["review_status"] = r.status
 
+    negotiation_rows = (
+        db.query(Negotiation)
+        .order_by(
+            Negotiation.contract_id,
+            Negotiation.updated_at.desc(),
+            Negotiation.created_at.desc(),
+            Negotiation.id.desc(),
+        )
+        .all()
+    )
+    first_negotiation: dict = {}
+    active_negotiation: dict = {}
+    for negotiation in negotiation_rows:
+        first_negotiation.setdefault(negotiation.contract_id, negotiation)
+        if negotiation.workflow_status not in {"accepted", "closed"}:
+            active_negotiation.setdefault(negotiation.contract_id, negotiation)
+    for cid, latest in first_negotiation.items():
+        selected = active_negotiation.get(cid, latest)
+        ensure(cid)
+        out[cid]["negotiation_status"] = selected.workflow_status
+
     wf_rows = (
         db.query(ApprovalWorkflow)
-        .order_by(ApprovalWorkflow.contract_id, ApprovalWorkflow.created_at.desc())
+        .order_by(ApprovalWorkflow.contract_id, ApprovalWorkflow.created_at.desc(), ApprovalWorkflow.id.desc())
         .all()
     )
     seen_wf: set = set()
@@ -314,7 +341,7 @@ def workflow_summaries_by_contract(db: Session) -> dict:
 
     sig_rows = (
         db.query(SignatureRequest)
-        .order_by(SignatureRequest.contract_id, SignatureRequest.created_at.desc())
+        .order_by(SignatureRequest.contract_id, SignatureRequest.created_at.desc(), SignatureRequest.id.desc())
         .all()
     )
     seen_sig: set = set()

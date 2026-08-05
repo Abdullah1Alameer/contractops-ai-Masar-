@@ -4,6 +4,8 @@ Audit date: 2026-08-05
 Repository: current local working tree  
 Method: static chain tracing, database inspection, API smoke execution, backend/frontend verification, route crawl, and targeted runtime reproduction. No uploaded contract contents or personal data are included.
 
+Remediation update (2026-08-05, Phase 2A): contract-list and version-lineage `workflow_summary` payloads now use the canonical `review_status`, `negotiation_status`, `approval_status`, and `signature_status` fields with `null` for absent state. Landing pipeline counts and contract-list deep links consume the same centralized bucket function. Lifecycle transition gaps remain out of scope and unresolved.
+
 ## Evidence labels
 
 - **INSPECTED** — code, schema, wiring, or configuration was traced.

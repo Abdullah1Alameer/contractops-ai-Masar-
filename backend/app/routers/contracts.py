@@ -67,6 +67,10 @@ async def upload_contract(
             raise HTTPException(400, detail={"error": "scanned_pdf_not_supported"})
         if e.code == "unsupported_type":
             raise HTTPException(400, detail={"error": "unsupported_type"})
+        if e.code in {"empty_document", "no_meaningful_text", "encrypted_or_unsupported_docx"}:
+            raise HTTPException(400, detail={"error": e.code})
+        if e.code == "extraction_failed":
+            raise HTTPException(500, detail={"error": "extraction_failed"})
         raise HTTPException(422, detail={"error": "corrupted_file"})
 
     key = storage.save(data, filename)
@@ -239,6 +243,7 @@ def list_contracts(
             "classification_confidence": _num(c.classification_confidence),
             "party_b": c.party_b,
             "value_sar": _num(c.value_sar),
+            "end_date": c.end_date.isoformat() if c.end_date else None,
             "status": c.status,
             "stage": c.stage or "negotiation",
             "created_at": c.created_at.isoformat() if c.created_at else None,
@@ -249,6 +254,7 @@ def list_contracts(
         if "workflow_summary" in include_set:
             row["workflow_summary"] = wf_map.get(c.id, {
                 "review_status": None,
+                "negotiation_status": None,
                 "approval_status": None,
                 "signature_status": None,
             })

@@ -18,6 +18,7 @@ import { SkeletonTable } from "@/components/ui/Skeleton";
 import { useCachedFetch, invalidateByPrefix } from "@/lib/cache";
 import { api, deleteContract } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { filterContractsByPipelineBucket } from "@/lib/pipeline";
 import type { ContractListItem } from "@/lib/types";
 import { formatSAR } from "@/lib/utils";
 
@@ -38,6 +39,8 @@ function ContractsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const stageFilter = searchParams.get("stage");
+  const statusFilter = searchParams.get("status");
+  const bucketFilter = searchParams.get("bucket");
   const { setPrimaryAction } = useShell();
   const { confirm } = useConfirm();
   const toast = useToast();
@@ -68,6 +71,8 @@ function ContractsPageContent() {
     if (!rows) return [];
     let list = rows;
     if (stageFilter) list = list.filter((r) => (r.stage ?? "negotiation") === stageFilter);
+    if (statusFilter) list = list.filter((r) => r.status === statusFilter);
+    list = filterContractsByPipelineBucket(list, bucketFilter);
     if (statusChip) list = list.filter((r) => r.status === statusChip);
     if (typeChip) list = list.filter((r) => r.type === typeChip);
     if (q.trim()) {
@@ -83,7 +88,7 @@ function ContractsPageContent() {
       return (a.party_b ?? "").localeCompare(b.party_b ?? "");
     });
     return list;
-  }, [rows, stageFilter, statusChip, typeChip, q, sort]);
+  }, [rows, stageFilter, statusFilter, bucketFilter, statusChip, typeChip, q, sort]);
 
   const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -265,9 +270,9 @@ function ContractsPageContent() {
 
       <div className="flex flex-wrap gap-2">
         <span className="text-xs font-semibold text-gray-500">{t("common.filters")}:</span>
-        {stageFilter && (
+        {(stageFilter || statusFilter || bucketFilter) && (
           <button type="button" className="chip chip-active" onClick={() => router.push("/contracts")}>
-            {stageFilter} ×
+            {bucketFilter ?? stageFilter ?? statusFilter} ×
           </button>
         )}
         {statusOptions.map((s) => (

@@ -6,10 +6,15 @@ DOCX: python-docx with paragraph direction; pseudo-pages for markers.
 from __future__ import annotations
 
 import io
+import logging
 import re
+from zipfile import BadZipFile
 from typing import Any
 
 from .bidi_text import deshape_word, detect_direction
+
+logger = logging.getLogger(__name__)
+
 
 class TextExtractError(Exception):
     def __init__(self, code: str):
@@ -159,15 +164,27 @@ def _pdf_blocks(data: bytes) -> list[dict]:
 
 def _docx_blocks(data: bytes) -> list[dict]:
     from docx import Document
+    from docx.opc.exceptions import PackageNotFoundError
     from docx.oxml.ns import qn
 
-    doc = Document(io.BytesIO(data))
+    if data.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
+        raise TextExtractError("encrypted_or_unsupported_docx")
+
+    try:
+        doc = Document(io.BytesIO(data))
+    except (PackageNotFoundError, BadZipFile, KeyError):
+        raise TextExtractError("corrupted")
+
     blocks: list[dict] = []
 
     def _para_dir(para) -> str:
         p_pr = para._element.pPr
-        if p_pr is not None and p_pr.bidi is not None:
-            return "rtl"
+        if p_pr is not None:
+            bidi = p_pr.find(qn("w:bidi"))
+            if bidi is not None:
+                value = bidi.get(qn("w:val"))
+                if value is None or value.strip().lower() not in {"0", "false", "off", "no"}:
+                    return "rtl"
         return detect_direction(para.text)
 
     for para in doc.paragraphs:
@@ -190,6 +207,11 @@ def _docx_blocks(data: bytes) -> list[dict]:
                 blocks.append(
                     {"text": t, "bbox": [0.0, 0.0, 0.0, 0.0], "direction": detect_direction(t), "column": 1}
                 )
+
+    if not blocks:
+        if doc.paragraphs or doc.tables:
+            raise TextExtractError("no_meaningful_text")
+        raise TextExtractError("empty_document")
 
     pages: list[dict] = []
     current_blocks: list[dict] = []
@@ -257,12 +279,16 @@ def extract_pages_geometry(data: bytes, filename: str) -> list[dict]:
             return pages
         if name.endswith(".docx"):
             pages = _docx_blocks(data)
-            if not any(p.get("text", "").strip() for p in pages):
-                raise TextExtractError("scanned_pdf_not_supported")
             return pages
     except TextExtractError:
         raise
-    except Exception:
+    except Exception as exc:
+        if name.endswith(".docx"):
+            logger.exception(
+                "docx_extraction_failed",
+                extra={"document_type": "docx", "exception_type": type(exc).__name__},
+            )
+            raise TextExtractError("extraction_failed")
         raise TextExtractError("corrupted")
     raise TextExtractError("unsupported_type")
 

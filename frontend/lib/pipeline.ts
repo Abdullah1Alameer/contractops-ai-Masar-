@@ -1,4 +1,5 @@
 import type { TKey } from "@/lib/i18n";
+import type { WorkflowSummary } from "@/lib/types";
 
 export type PipelineKey =
   | "draft"
@@ -18,12 +19,7 @@ export type HomeContractRow = {
   stage?: string | null;
   value_sar?: number | null;
   end_date?: string | null;
-  workflow_summary?: {
-    review?: string | null;
-    negotiation?: string | null;
-    approval?: string | null;
-    signature?: string | null;
-  } | null;
+  workflow_summary?: WorkflowSummary | null;
 };
 
 export type PipelineBucketSummary = {
@@ -74,40 +70,131 @@ const SERVER_STAGE: Record<PipelineKey, string> = {
   completed: "active",
 };
 
+const KNOWN_STAGES = new Set([
+  "",
+  "draft",
+  "negotiation",
+  "internal_review",
+  "approved",
+  "awaiting_signature",
+  "partially_signed",
+  "signed",
+  "active",
+  "completed",
+]);
+const KNOWN_CONTRACT_STATUSES = new Set(["processing", "ready", "needs_review", "failed", "unsupported", "completed"]);
+const KNOWN_REVIEW_STATUSES = new Set(["sent", "opened", "approved", "rejected", "changes_requested", "expired"]);
+const KNOWN_NEGOTIATION_STATUSES = new Set([
+  "pending_analysis",
+  "ready",
+  "edited_by_legal",
+  "sent_to_client",
+  "client_responded",
+  "accepted",
+  "closed",
+]);
+const KNOWN_APPROVAL_STATUSES = new Set(["in_progress", "approved", "rejected", "changes_requested", "cancelled"]);
+const KNOWN_SIGNATURE_STATUSES = new Set([
+  "draft",
+  "created",
+  "sent",
+  "viewed",
+  "partially_signed",
+  "completed",
+  "declined",
+  "expired",
+  "cancelled",
+  "error",
+]);
+
 export function bucketContract(c: HomeContractRow): PipelineKey {
-  const status = c.status;
-  const stage = c.stage ?? "negotiation";
-  const review = c.workflow_summary?.review?.toLowerCase();
+  const status = c.status.toLowerCase();
+  const stage = (c.stage ?? "").toLowerCase();
+  const rawReview = c.workflow_summary?.review_status?.toLowerCase() ?? null;
+  const rawNegotiation = c.workflow_summary?.negotiation_status?.toLowerCase() ?? null;
+  const rawApproval = c.workflow_summary?.approval_status?.toLowerCase() ?? null;
+  const rawSignature = c.workflow_summary?.signature_status?.toLowerCase() ?? null;
+  const review = rawReview && KNOWN_REVIEW_STATUSES.has(rawReview) ? rawReview : null;
+  const negotiation =
+    rawNegotiation && KNOWN_NEGOTIATION_STATUSES.has(rawNegotiation) ? rawNegotiation : null;
+  const approval = rawApproval && KNOWN_APPROVAL_STATUSES.has(rawApproval) ? rawApproval : null;
+  const signature = rawSignature && KNOWN_SIGNATURE_STATUSES.has(rawSignature) ? rawSignature : null;
 
-  if (status === "processing") return "draft";
-  if (status === "needs_review") return "ai_review";
+  if (
+    process.env.NODE_ENV !== "production" &&
+    (!KNOWN_STAGES.has(stage) ||
+      !KNOWN_CONTRACT_STATUSES.has(status) ||
+      (rawReview !== null && review === null) ||
+      (rawNegotiation !== null && negotiation === null) ||
+      (rawApproval !== null && approval === null) ||
+      (rawSignature !== null && signature === null))
+  ) {
+    console.warn("Unknown contract workflow state", {
+      stage,
+      status,
+      review: rawReview,
+      negotiation: rawNegotiation,
+      approval: rawApproval,
+      signature: rawSignature,
+    });
+  }
 
-  if (review === "sent") return "sent_to_client";
-  if (review === "opened") return "client_reviewing";
+  const ended =
+    stage === "active" &&
+    !!c.end_date &&
+    !Number.isNaN(new Date(c.end_date).getTime()) &&
+    new Date(c.end_date) < new Date();
 
-  if (stage === "internal_review") return "internal_review";
-  if (stage === "negotiation") return "negotiating";
-  if (stage === "approved" || stage === "awaiting_signature" || stage === "partially_signed") {
+  if (stage === "completed" || status === "completed" || ended) return "completed";
+  if (stage === "active") return "active";
+
+  if (stage === "signed" || signature === "completed") return "signed";
+  if (
+    stage === "awaiting_signature" ||
+    stage === "partially_signed" ||
+    ["created", "sent", "viewed", "partially_signed"].includes(signature ?? "")
+  ) {
     return "awaiting_signature";
   }
-  if (stage === "signed") return "signed";
-  if (stage === "active") {
-    if (c.end_date) {
-      const end = new Date(c.end_date);
-      if (!Number.isNaN(end.getTime()) && end < new Date()) return "completed";
-    }
-    return "active";
+
+  if (
+    stage === "internal_review" ||
+    stage === "approved" ||
+    approval === "in_progress" ||
+    approval === "changes_requested"
+  ) {
+    return "internal_review";
   }
-  return "negotiating";
+
+  const activeNegotiation = !!negotiation && !["accepted", "closed"].includes(negotiation);
+  if (stage === "negotiation" && (activeNegotiation || review === "changes_requested")) {
+    return "negotiating";
+  }
+  if (review === "opened") return "client_reviewing";
+  if (review === "sent") return "sent_to_client";
+
+  if (status === "needs_review") return "ai_review";
+  if (status === "processing" || stage === "draft") return "draft";
+
+  return "draft";
 }
 
 export function pipelineHref(key: PipelineKey): string {
-  const stage = SERVER_STAGE[key];
-  if (key === "ai_review") return "/contracts?status=needs_review";
-  if (key === "draft") return "/contracts?status=processing";
-  if (key === "sent_to_client" || key === "client_reviewing") return "/reviews";
-  if (key === "completed") return `/contracts?stage=${stage}&bucket=completed`;
-  return `/contracts?stage=${stage}&bucket=${key}`;
+  return `/contracts?bucket=${key}`;
+}
+
+export function filterContractsByPipelineBucket<T extends HomeContractRow>(
+  contracts: T[],
+  bucket: string | null
+): T[] {
+  if (!bucket) return contracts;
+  if (!PIPELINE_ORDER.includes(bucket as PipelineKey)) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("Unknown pipeline bucket", { bucket });
+    }
+    return contracts;
+  }
+  return contracts.filter((contract) => bucketContract(contract) === bucket);
 }
 
 export function summarizePipeline(

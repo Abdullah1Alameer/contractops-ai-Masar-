@@ -2,6 +2,49 @@ export type ContractStatus = "processing" | "ready" | "needs_review" | "failed" 
 
 export type ContractType = "main" | "subcontract" | null;
 
+export type WorkflowReviewStatus =
+  | "sent"
+  | "opened"
+  | "approved"
+  | "rejected"
+  | "changes_requested"
+  | "expired";
+
+export type WorkflowNegotiationStatus =
+  | "pending_analysis"
+  | "ready"
+  | "edited_by_legal"
+  | "sent_to_client"
+  | "client_responded"
+  | "accepted"
+  | "closed";
+
+export type WorkflowApprovalStatus =
+  | "in_progress"
+  | "approved"
+  | "rejected"
+  | "changes_requested"
+  | "cancelled";
+
+export type WorkflowSignatureStatus =
+  | "draft"
+  | "created"
+  | "sent"
+  | "viewed"
+  | "partially_signed"
+  | "completed"
+  | "declined"
+  | "expired"
+  | "cancelled"
+  | "error";
+
+export interface WorkflowSummary {
+  review_status: WorkflowReviewStatus | null;
+  negotiation_status: WorkflowNegotiationStatus | null;
+  approval_status: WorkflowApprovalStatus | null;
+  signature_status: WorkflowSignatureStatus | null;
+}
+
 export interface ClauseSource {
   id?: string;
   clause_ref: string | null;
@@ -20,8 +63,10 @@ export interface ContractListItem {
   classification_confidence: number | null;
   party_b: string | null;
   value_sar: number | null;
+  end_date?: string | null;
   status: ContractStatus;
-  stage?: string;
+  stage?: string | null;
+  workflow_summary?: WorkflowSummary | null;
   current_version_number?: number | null;
   total_versions?: number;
   obligation_counts: { pending: number; overdue: number };
@@ -653,12 +698,7 @@ export interface ContractVersionRow {
   is_signed?: boolean;
   is_approved?: boolean;
   display_status?: string;
-  workflow_summary?: {
-    review: string | null;
-    negotiation: string | null;
-    approval: string | null;
-    signature: string | null;
-  };
+  workflow_summary?: WorkflowSummary;
 }
 
 export interface VersionLineageEvent {
@@ -696,12 +736,7 @@ export interface VersionLineageVersion {
   change_summary: string | null;
   parent_version_id: string | null;
   risk_score: number | null;
-  workflow_summary: {
-    review: string | null;
-    negotiation: string | null;
-    approval: string | null;
-    signature: string | null;
-  };
+  workflow_summary: WorkflowSummary;
   workflow_stale_count: number;
   event_count: number;
   last_activity_at: string | null;

@@ -221,11 +221,6 @@ def _resolve_version_id_for_activity(
 
 
 def _workflow_summary_for_version(version: ContractVersion, db: Session, cur_id) -> dict[str, str | None]:
-    def status_or_none(latest, not_started="not_started"):
-        if latest is None:
-            return not_started
-        return latest
-
     rr = (
         db.query(ReviewRequest)
         .filter_by(version_id=version.id)
@@ -251,16 +246,11 @@ def _workflow_summary_for_version(version: ContractVersion, db: Session, cur_id)
         .first()
     )
 
-    review_s = rr.status if rr else "not_started"
-    neg_s = neg.workflow_status if neg else "not_started"
-    appr_s = aw.status if aw else "not_started"
-    sig_s = sr.status if sr else "not_started"
-
     return {
-        "review": review_s,
-        "negotiation": neg_s,
-        "approval": appr_s,
-        "signature": sig_s,
+        "review_status": rr.status if rr else None,
+        "negotiation_status": neg.workflow_status if neg else None,
+        "approval_status": aw.status if aw else None,
+        "signature_status": sr.status if sr else None,
     }
 
 
