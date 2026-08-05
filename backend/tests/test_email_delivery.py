@@ -3,6 +3,8 @@ from email.message import EmailMessage
 
 import pytest
 
+from app.config import get_email_delivery_settings
+from app.services import email_delivery
 from app.services.email_delivery import (
     EmailDeliveryError,
     send_email,
@@ -56,6 +58,7 @@ class RecordingSMTP:
     def __init__(self, host, port, timeout):
         self.connection = (host, port, timeout)
         self.started_tls = False
+        self.tls_context = None
         self.login_args = None
         self.message = None
 
@@ -65,8 +68,9 @@ class RecordingSMTP:
     def __exit__(self, *_args):
         return None
 
-    def starttls(self):
+    def starttls(self, *, context):
         self.started_tls = True
+        self.tls_context = context
 
     def login(self, username, password):
         self.login_args = (username, password)
@@ -76,8 +80,10 @@ class RecordingSMTP:
         return {}
 
 
-def test_send_email_delivers_text_and_html_through_injected_smtp(valid_smtp_env):
+def test_send_email_delivers_text_and_html_through_injected_smtp(monkeypatch, valid_smtp_env):
     clients = []
+    tls_context = object()
+    monkeypatch.setattr(email_delivery.ssl, "create_default_context", lambda: tls_context)
 
     def smtp_factory(*args, **kwargs):
         client = RecordingSMTP(*args, **kwargs)
@@ -100,6 +106,7 @@ def test_send_email_delivers_text_and_html_through_injected_smtp(valid_smtp_env)
     client = clients[0]
     assert client.connection == ("smtp.example.test", 587, 10.0)
     assert client.started_tls is True
+    assert client.tls_context is tls_context
     assert client.login_args == ("mailer", "smtp-secret-value")
     assert isinstance(client.message, EmailMessage)
     assert client.message["To"] == "reviewer@example.test"
@@ -112,12 +119,30 @@ def test_send_email_delivers_text_and_html_through_injected_smtp(valid_smtp_env)
 
 @pytest.mark.parametrize(
     "recipient",
-    ["", "not-an-email", "Name <missing-at-sign>", "one@example.test, two@example.test", "a@example.test\nBcc: x@y.test"],
+    [
+        "",
+        "not-an-email",
+        "Name <missing-at-sign>",
+        "one@example.test, two@example.test",
+        "a@example.test\nBcc: x@y.test",
+        ".user@example.test",
+        "user.@example.test",
+        "user..name@example.test",
+        "user@example..test",
+        "user@-example.test",
+        "user@example-.test",
+        "user@exam_ple.test",
+        f"user@{'a' * 64}.test",
+    ],
 )
 def test_validate_recipient_rejects_invalid_or_multiple_addresses(recipient):
     with pytest.raises(EmailDeliveryError) as exc_info:
         validate_recipient(recipient)
     assert (exc_info.value.status_code, exc_info.value.code) == (422, "invalid_email_recipient")
+
+
+def test_validate_recipient_accepts_conservative_single_mailbox():
+    assert validate_recipient("user.name+tag@example-domain.test") == "user.name+tag@example-domain.test"
 
 
 def test_disabled_delivery_is_rejected(monkeypatch, valid_smtp_env):
@@ -146,12 +171,46 @@ def test_enabled_delivery_requires_configuration(monkeypatch, valid_smtp_env, ke
     assert exc_info.value.code == "smtp_configuration_missing"
 
 
-@pytest.mark.parametrize("timeout", ["0", "-1", "61", "not-a-number"])
+@pytest.mark.parametrize("timeout", ["0", "-1", "61", "nan", "not-a-number"])
 def test_timeout_must_be_positive_and_bounded(monkeypatch, valid_smtp_env, timeout):
     monkeypatch.setenv("SMTP_TIMEOUT_SECONDS", timeout)
     with pytest.raises(EmailDeliveryError) as exc_info:
         validate_email_configuration()
     assert exc_info.value.code == "smtp_timeout_invalid"
+
+
+def test_smtp_ssl_receives_default_tls_context(monkeypatch, valid_smtp_env):
+    monkeypatch.setenv("SMTP_USE_TLS", "false")
+    monkeypatch.setenv("SMTP_USE_SSL", "true")
+    tls_context = object()
+    monkeypatch.setattr(email_delivery.ssl, "create_default_context", lambda: tls_context)
+    clients = []
+
+    class RecordingSMTPSsl(RecordingSMTP):
+        def __init__(self, host, port, timeout, context):
+            super().__init__(host, port, timeout)
+            self.ssl_context = context
+
+    def smtp_factory(*args, **kwargs):
+        client = RecordingSMTPSsl(*args, **kwargs)
+        clients.append(client)
+        return client
+
+    result = send_email(
+        recipient="reviewer@example.test",
+        subject="Contract review requested",
+        text_body="Open the secure review link.",
+        html_body="<p>Open the secure review link.</p>",
+        smtp_factory=smtp_factory,
+    )
+
+    assert result.status == "sent"
+    assert clients[0].ssl_context is tls_context
+    assert clients[0].started_tls is False
+
+
+def test_smtp_username_is_hidden_from_configuration_repr(valid_smtp_env):
+    assert valid_smtp_env["SMTP_USERNAME"] not in repr(get_email_delivery_settings())
 
 
 @pytest.mark.parametrize(

@@ -27,7 +27,7 @@ class EmailDeliverySettings:
     enabled: str
     host: str
     port: str
-    username: str
+    username: str = field(repr=False)
     password: str = field(repr=False)
     from_email: str
     from_name: str

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import ipaddress
+import math
+import re
 import smtplib
+import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -14,6 +17,10 @@ from app.config import EmailDeliverySettings, get_email_delivery_settings
 
 
 MAX_SMTP_TIMEOUT_SECONDS = 60.0
+LOCAL_PART_PATTERN = re.compile(
+    r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$"
+)
+DOMAIN_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
 class EmailDeliveryError(Exception):
@@ -40,7 +47,7 @@ class EmailDeliveryResult:
 class _ValidatedEmailConfiguration:
     host: str
     port: int
-    username: str
+    username: str = field(repr=False)
     password: str = field(repr=False)
     from_email: str
     from_name: str
@@ -79,7 +86,16 @@ def validate_recipient(recipient: str) -> str:
     if display_name or address != recipient.strip():
         raise EmailDeliveryError(422, "invalid_email_recipient")
     local, separator, domain = address.rpartition("@")
-    if not separator or not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+    labels = domain.split(".")
+    if (
+        not separator
+        or len(address) > 254
+        or len(local) > 64
+        or not LOCAL_PART_PATTERN.fullmatch(local)
+        or len(domain) > 253
+        or len(labels) < 2
+        or any(not DOMAIN_LABEL_PATTERN.fullmatch(label) for label in labels)
+    ):
         raise EmailDeliveryError(422, "invalid_email_recipient")
     return address
 
@@ -120,7 +136,11 @@ def _load_validated_email_configuration() -> _ValidatedEmailConfiguration:
 
     if not 1 <= port <= 65535:
         raise EmailDeliveryError(500, "smtp_configuration_invalid")
-    if timeout_seconds <= 0 or timeout_seconds > MAX_SMTP_TIMEOUT_SECONDS:
+    if (
+        not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+        or timeout_seconds > MAX_SMTP_TIMEOUT_SECONDS
+    ):
         raise EmailDeliveryError(500, "smtp_timeout_invalid")
     if use_tls and use_ssl:
         raise EmailDeliveryError(500, "smtp_tls_ssl_conflict")
@@ -187,11 +207,15 @@ def send_email(
     message.add_alternative(html_body, subtype="html")
 
     factory = smtp_factory or (smtplib.SMTP_SSL if configuration.use_ssl else smtplib.SMTP)
+    tls_context = ssl.create_default_context()
+    connection_options = {"timeout": configuration.timeout_seconds}
+    if configuration.use_ssl:
+        connection_options["context"] = tls_context
     try:
         client = factory(
             configuration.host,
             configuration.port,
-            timeout=configuration.timeout_seconds,
+            **connection_options,
         )
     except Exception:
         return _failed("smtp_connection_failed")
@@ -199,7 +223,7 @@ def send_email(
     phase = "connection"
     try:
         if configuration.use_tls:
-            client.starttls()
+            client.starttls(context=tls_context)
         if configuration.username:
             client.login(configuration.username, configuration.password)
         phase = "send"
