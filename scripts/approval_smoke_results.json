@@ -1,6 +1,6 @@
 {
   "summary": {
-    "base_url": "http://127.0.0.1:8099",
+    "base_url": "http://127.0.0.1:8000",
     "checks_total": 68,
     "checks_passed": 68,
     "checks_failed": 0,
@@ -20,7 +20,7 @@
     {
       "name": "start returns 200",
       "pass": true,
-      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+      "detail": "{\"id\":\"b6fc359d-8896-434e-baa3-24562a0bf6ba\",\"contract_id\":\"33b45df0-2116-4fb3-9bc4-980f5a9a1377\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:12.0"
     },
     {
       "name": "start keeps internal_review",
@@ -61,7 +61,7 @@
     {
       "name": "business_owner approval returns 200",
       "pass": true,
-      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":2,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+      "detail": "{\"id\":\"b6fc359d-8896-434e-baa3-24562a0bf6ba\",\"contract_id\":\"33b45df0-2116-4fb3-9bc4-980f5a9a1377\",\"status\":\"in_progress\",\"current_step_order\":2,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:12.0"
     },
     {
       "name": "stage stays internal_review after business_owner",
@@ -97,7 +97,7 @@
     {
       "name": "legal approval returns 200",
       "pass": true,
-      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":3,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+      "detail": "{\"id\":\"b6fc359d-8896-434e-baa3-24562a0bf6ba\",\"contract_id\":\"33b45df0-2116-4fb3-9bc4-980f5a9a1377\",\"status\":\"in_progress\",\"current_step_order\":3,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:12.0"
     },
     {
       "name": "stage stays internal_review after legal",
@@ -133,7 +133,7 @@
     {
       "name": "finance approval returns 200",
       "pass": true,
-      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":4,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+      "detail": "{\"id\":\"b6fc359d-8896-434e-baa3-24562a0bf6ba\",\"contract_id\":\"33b45df0-2116-4fb3-9bc4-980f5a9a1377\",\"status\":\"in_progress\",\"current_step_order\":4,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:12.0"
     },
     {
       "name": "stage stays internal_review after finance",
@@ -169,7 +169,7 @@
     {
       "name": "executive approval returns 200",
       "pass": true,
-      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"approved\",\"current_step_order\":4,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3928"
+      "detail": "{\"id\":\"b6fc359d-8896-434e-baa3-24562a0bf6ba\",\"contract_id\":\"33b45df0-2116-4fb3-9bc4-980f5a9a1377\",\"status\":\"approved\",\"current_step_order\":4,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:12.0351"
     },
     {
       "name": "final approval sets ready_to_sign",
@@ -321,7 +321,7 @@
     {
       "name": "change request returns 200",
       "pass": true,
-      "detail": "{\"id\":\"a03551c0-5970-4e12-a309-aeec414b1dc8\",\"contract_id\":\"c848964e-6e32-4ef2-8d1e-dc53a3d50381\",\"status\":\"changes_requested\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:5"
+      "detail": "{\"id\":\"901b4e3c-dab4-4aab-8944-46246ae016f0\",\"contract_id\":\"65e44927-8cb1-4042-bfac-282e8e8576a6\",\"status\":\"changes_requested\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:0"
     },
     {
       "name": "stage moves to negotiation",
@@ -342,39 +342,39 @@
       "name": "event approval_changes_requested persisted",
       "pass": true,
       "detail": [
-        "version_sent_for_approval",
         "approval_workflow_started",
-        "negotiation_analysis_requested",
+        "version_sent_for_approval",
+        "approval_changes_requested",
         "contract_entered_negotiation",
-        "approval_changes_requested"
+        "negotiation_analysis_requested"
       ]
     },
     {
       "name": "event contract_entered_negotiation persisted",
       "pass": true,
       "detail": [
-        "version_sent_for_approval",
         "approval_workflow_started",
-        "negotiation_analysis_requested",
+        "version_sent_for_approval",
+        "approval_changes_requested",
         "contract_entered_negotiation",
-        "approval_changes_requested"
+        "negotiation_analysis_requested"
       ]
     },
     {
       "name": "event negotiation_analysis_requested persisted",
       "pass": true,
       "detail": [
-        "version_sent_for_approval",
         "approval_workflow_started",
-        "negotiation_analysis_requested",
+        "version_sent_for_approval",
+        "approval_changes_requested",
         "contract_entered_negotiation",
-        "approval_changes_requested"
+        "negotiation_analysis_requested"
       ]
     },
     {
       "name": "rejection returns 200",
       "pass": true,
-      "detail": "{\"id\":\"8d9536bf-677d-42a8-8ad5-fcceb1785d60\",\"contract_id\":\"c115cd0b-a993-40e7-b02a-a32d11e041b7\",\"status\":\"rejected\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:46.1427"
+      "detail": "{\"id\":\"365cae4d-0e55-4db3-bca2-495b82b7ea63\",\"contract_id\":\"e20163d7-6b88-4463-9492-3bb602475be7\",\"status\":\"rejected\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:43.5552"
     },
     {
       "name": "stage rejected",
@@ -395,33 +395,33 @@
       "name": "event approval_step_rejected persisted",
       "pass": true,
       "detail": [
-        "approval_workflow_started",
         "version_sent_for_approval",
+        "approval_workflow_started",
         "contract_rejected",
-        "approval_step_rejected",
-        "approval_rejected"
+        "approval_rejected",
+        "approval_step_rejected"
       ]
     },
     {
       "name": "event approval_rejected persisted",
       "pass": true,
       "detail": [
-        "approval_workflow_started",
         "version_sent_for_approval",
+        "approval_workflow_started",
         "contract_rejected",
-        "approval_step_rejected",
-        "approval_rejected"
+        "approval_rejected",
+        "approval_step_rejected"
       ]
     },
     {
       "name": "event contract_rejected persisted",
       "pass": true,
       "detail": [
-        "approval_workflow_started",
         "version_sent_for_approval",
+        "approval_workflow_started",
         "contract_rejected",
-        "approval_step_rejected",
-        "approval_rejected"
+        "approval_rejected",
+        "approval_step_rejected"
       ]
     },
     {
@@ -437,7 +437,7 @@
     {
       "name": "cancel returns 200",
       "pass": true,
-      "detail": "{\"id\":\"f3c37490-b7fe-460b-b29f-0cfc8dd005cb\",\"contract_id\":\"5c74a6af-4bf0-4044-ae76-2a4342258250\",\"status\":\"cancelled\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:51.882"
+      "detail": "{\"id\":\"50ff069d-2476-41c9-aa93-5d90f66a26be\",\"contract_id\":\"aea9567b-31a8-4f98-94b3-bead2eee13bc\",\"status\":\"cancelled\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:50.715"
     },
     {
       "name": "cancel keeps internal_review",
@@ -483,7 +483,7 @@
     {
       "name": "restart allowed after cancel",
       "pass": true,
-      "detail": "{\"id\":\"9ecabb37-ebc8-4e6d-8943-2ef3470b4aa8\",\"contract_id\":\"5c74a6af-4bf0-4044-ae76-2a4342258250\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:55.7"
+      "detail": "{\"id\":\"9630f6b9-8126-4dfe-a80c-365aa9edbf10\",\"contract_id\":\"aea9567b-31a8-4f98-94b3-bead2eee13bc\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:02:55.3"
     },
     {
       "name": "restart created second workflow",
@@ -493,7 +493,7 @@
     {
       "name": "unresolved negotiation blocks start",
       "pass": true,
-      "detail": "{\"detail\":{\"error\":\"unresolved_negotiations\",\"unresolved\":[{\"id\":\"c15e1ad6-cf09-4945-b5b7-fc2d38f47cb1\",\"clause_ref\":\"7.1\",\"workflow_status\":\"pending_analysis\"}]}}"
+      "detail": "{\"detail\":{\"error\":\"unresolved_negotiations\",\"unresolved\":[{\"id\":\"fd474e5e-f74c-4ab1-9406-4e77eddf06a2\",\"clause_ref\":\"7.1\",\"workflow_status\":\"pending_analysis\"}]}}"
     },
     {
       "name": "blocked start created no workflow",
@@ -518,7 +518,7 @@
     {
       "name": "legal override accepted",
       "pass": true,
-      "detail": "{\"id\":\"0a62a6c1-2b7d-4a64-9c5f-4fc6a854b099\",\"contract_id\":\"4d26bada-1014-4dd4-8189-d445623d16a0\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:51:02.0"
+      "detail": "{\"id\":\"e26542eb-6676-4fe9-bf19-6ff90bd64626\",\"contract_id\":\"ea3cd54c-9f22-4af0-b52c-3a97485fd1f9\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T22:03:02.8"
     },
     {
       "name": "override flagged on workflow",
@@ -574,12 +574,12 @@
       "pass": true,
       "detail": {
         "role": "legal",
-        "timestamp": "2026-08-05T14:51:02.505395+00:00",
+        "timestamp": "2026-08-05T22:03:03.310871+00:00",
         "actor_type": "internal",
-        "version_id": "41c226dc-1920-4439-90be-158bab700829",
-        "contract_id": "4d26bada-1014-4dd4-8189-d445623d16a0",
+        "version_id": "b6cfcdae-bd4d-4755-8fa9-13a09da514c9",
+        "contract_id": "ea3cd54c-9f22-4af0-b52c-3a97485fd1f9",
         "reason_hash": "d69bf8243a5b8934",
-        "workflow_id": "0a62a6c1-2b7d-4a64-9c5f-4fc6a854b099",
+        "workflow_id": "e26542eb-6676-4fe9-bf19-6ff90bd64626",
         "entry_evidence": "client_review_approved",
         "reason_present": true,
         "version_number": 1,
@@ -587,7 +587,7 @@
           "unresolved_negotiations"
         ],
         "overridden_negotiation_ids": [
-          "c15e1ad6-cf09-4945-b5b7-fc2d38f47cb1"
+          "fd474e5e-f74c-4ab1-9406-4e77eddf06a2"
         ]
       }
     },

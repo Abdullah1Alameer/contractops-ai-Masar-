@@ -560,7 +560,12 @@ export default function ContractDetailPage() {
           </TabPanel>
 
           <TabPanel value="signature">
-            <SignaturePanel contractId={id} contractStage={detail.stage} highlightId={highlightSignature} />
+            <SignaturePanel
+              contractId={id}
+              contractStage={detail.stage}
+              highlightId={highlightSignature}
+              onLifecycleChange={load}
+            />
           </TabPanel>
 
           <TabPanel value="versions">

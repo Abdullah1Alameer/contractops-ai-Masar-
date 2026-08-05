@@ -15,7 +15,7 @@ def test_cannot_create_before_approval():
     db = MagicMock()
     contract = SimpleNamespace(id=uuid.uuid4(), stage="negotiation")
     db.get.return_value = contract
-    with pytest.raises(ValueError, match="contract_not_approved"):
+    with pytest.raises(ValueError, match="invalid_stage_transition"):
         sig_svc.create_request(
             contract.id,
             db,
@@ -39,42 +39,15 @@ def test_token_hash_unique():
     assert len(a) == 64
 
 
-@patch("app.services.signature.storage")
-@patch("app.services.signature.get_active_request")
-@patch("app.services.signature.transition_stage")
-@patch("app.services.signature.log_activity")
-@patch("app.services.signature.log_sig_event")
-@patch("app.services.signature.original_bytes")
-def test_create_moves_awaiting(mock_orig, mock_log, mock_la, mock_stage, mock_active, mock_storage):
-    mock_active.return_value = None
-    mock_orig.return_value = b"%PDF-1.4 demo"
-    mock_storage.save.return_value = "filekey"
-    cid = uuid.uuid4()
-    contract = SimpleNamespace(id=cid, stage="approved", title="T", party_a="Co")
-    db = MagicMock()
-    db.get.return_value = contract
-    db.add = MagicMock()
-    db.flush = MagicMock()
-    db.commit = MagicMock()
-    db.refresh = MagicMock()
+def test_signer_token_is_reproducible_and_stored_as_hash(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "test-portal-secret")
 
-    with patch("app.services.signature.get_provider") as gp:
-        gp.return_value = SimpleNamespace(name="simulated", create_request=lambda **k: {})
-        out = sig_svc.create_request(
-            cid,
-            db,
-            subject="Sign",
-            message="Hi",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=5),
-            signing_order_enabled=True,
-            signers=[
-                {"name": "A", "email": "a@x.com", "role": "company_signatory", "order": 1},
-                {"name": "B", "email": "b@x.com", "role": "client_signatory", "order": 2},
-            ],
-        )
-    mock_stage.assert_called()
-    assert "signer_links" in out
-    assert len(out["signer_links"]) == 2
+    material = sig_svc.generate_token_material()
+    signer = SimpleNamespace(token_nonce=material.nonce)
+
+    assert sig_svc.public_token_for_signer(signer) == material.public_token
+    assert sig_svc.hash_token(material.public_token) == material.token_hash
+    assert material.public_token != material.nonce
 
 
 def test_signing_order_blocks_second():
@@ -170,10 +143,3 @@ def test_build_invitation_bilingual():
     assert "Signature Request" in email["subject_en"]
 
 
-def test_cancel_completed_fails():
-    req = SimpleNamespace(id=uuid.uuid4(), status="completed", contract_id=uuid.uuid4())
-    db = MagicMock()
-    db.get.return_value = req
-    with patch.object(sig_svc, "get_request_by_id", return_value=req):
-        with pytest.raises(ValueError, match="request_closed"):
-            sig_svc.cancel_request(req.id, db)

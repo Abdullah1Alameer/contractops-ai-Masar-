@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import demo_role
 from ..services import signature as sig_svc
+from ..services.email_delivery import EmailDeliveryError
+from ..services.lifecycle import LifecycleError
 from ..services.storage import storage
 
 router = APIRouter(tags=["signature"])
@@ -31,8 +33,22 @@ class CreateSignatureBody(BaseModel):
     signing_order_enabled: bool = True
     signers: list[SignerInput] = Field(min_length=1)
 
+class CancelSignatureBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
 
-def _map_err(e: ValueError) -> HTTPException:
+
+class ActivateSignatureBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=4000)
+
+
+def _map_err(e: Exception) -> HTTPException:
+    if isinstance(e, sig_svc.SignatureError):
+        return HTTPException(e.status_code, detail=e.payload)
+    if isinstance(e, LifecycleError):
+        return HTTPException(e.status_code, detail=e.payload)
+    if isinstance(e, EmailDeliveryError):
+        return HTTPException(e.status_code, detail={"error": e.code})
     code = str(e)
     if code in ("contract_not_approved", "active_request_exists", "invalid_transition", "request_closed"):
         return HTTPException(409, detail={"error": code})
@@ -59,7 +75,7 @@ def create_signature_request(
             signers=[s.model_dump() for s in body.signers],
             actor=role,
         )
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _map_err(e)
 
 
@@ -76,19 +92,34 @@ def send_signature_request(
 ):
     try:
         return sig_svc.send_request(request_id, db, actor=role)
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _map_err(e)
 
 
 @router.post("/signature-requests/{request_id}/cancel")
 def cancel_signature_request(
     request_id: uuid.UUID,
+    body: CancelSignatureBody,
     db: Session = Depends(get_db),
     role: str = Depends(demo_role),
 ):
     try:
-        return sig_svc.cancel_request(request_id, db, actor=role)
-    except ValueError as e:
+        return sig_svc.cancel_request(request_id, db, actor=role, reason=body.reason)
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
+        raise _map_err(e)
+
+@router.post("/signature-requests/{request_id}/activate")
+def activate_signature_request(
+    request_id: uuid.UUID,
+    body: ActivateSignatureBody,
+    db: Session = Depends(get_db),
+    role: str = Depends(demo_role),
+):
+    try:
+        return sig_svc.activate_contract(
+            request_id, db, actor=role, reason=body.reason, evidence=body.evidence
+        )
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _map_err(e)
 
 
@@ -101,7 +132,7 @@ def resend_signature(
 ):
     try:
         return sig_svc.resend_signer(request_id, signer_id, db, actor=role)
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _map_err(e)
 
 

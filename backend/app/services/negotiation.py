@@ -28,7 +28,14 @@ from ..models import (
 from . import approvals
 from . import versions as ver_svc
 from .lifecycle import ContractStage, LifecycleEvent, LifecycleService, TransitionResult, normalize_stage
-from .reviews import build_email_template, build_review_dossier, create_review_request, review_link, serialize_review_request
+from .reviews import (
+    build_email_template,
+    build_review_dossier,
+    create_review_request,
+    public_token_for_request,
+    review_link,
+    serialize_review_request,
+)
 
 ALLOWED_RISK = frozenset({"low", "medium", "high", "critical"})
 ALLOWED_RECOMMENDATION = frozenset({"accept_client", "negotiate", "reject_client"})
@@ -830,7 +837,7 @@ def send_updated(
         neg.status = "sent"
         neg.workflow_status = "sent_to_client"
         neg.sent_at = _utcnow()
-        link = review_link(new_req.token)
+        link = review_link(public_token_for_request(new_req))
         neg.final_summary = _build_final_summary(neg, link)
         _set_lifecycle_meta(
             neg,

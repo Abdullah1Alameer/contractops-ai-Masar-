@@ -1,6 +1,7 @@
 """Client Review Portal — secure links, dossier aggregation, decisions (no SMTP)."""
 from __future__ import annotations
 
+import html
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from ..models import (
     FlowdownFinding,
     Negotiation,
     Obligation,
+    OutboundMessage,
     ReviewComment,
     ReviewRequest,
     ReviewResponse,
@@ -26,6 +28,16 @@ from . import approvals
 from .deadlines import deadline_summary, list_deadlines_for_contract
 from .flowdown import list_flowdown_for_pair
 from .lifecycle import LifecycleEvent, LifecycleService, TransitionResult
+from .outbound_messages import (
+    TokenMaterial,
+    create_token_material,
+    create_pending_attempt,
+    deliver_pending_attempt,
+    enforce_resend_cooldown,
+    hash_public_token,
+    public_token_from_nonce,
+    serialize_delivery,
+)
 from .payments import list_payment_milestones_for_contract, payments_summary
 from . import versions as ver_svc
 
@@ -36,6 +48,7 @@ _TERMINAL_STATUSES = _DECISION_STATUSES | frozenset({"expired", "cancelled"})
 _USABLE_CONTRACT_STATUSES = frozenset({"ready", "needs_review"})
 _INITIAL_REVIEW = "initial"
 _NEGOTIATION_FOLLOWUP = "negotiation_followup"
+REVIEW_INVITATION_MESSAGE_TYPE = "review_invitation"
 
 
 class ReviewError(ValueError):
@@ -52,6 +65,22 @@ def _raise_review_error(status_code: int, code: str, **payload) -> None:
 
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def generate_token_material() -> TokenMaterial:
+    return create_token_material()
+
+
+def hash_token(public_token: str) -> str:
+    return hash_public_token(public_token)
+
+
+def public_token_for_request(req: ReviewRequest) -> str:
+    if req.token_nonce:
+        return public_token_from_nonce(req.token_nonce)
+    if req.token:
+        return req.token
+    _raise_review_error(500, "review_token_unavailable")
 
 
 def _utcnow() -> datetime:
@@ -471,23 +500,51 @@ def build_review_dossier(contract_id, db: Session) -> dict:
 
 def build_email_template(req: ReviewRequest, contract: Contract, link: str) -> dict:
     title = contract.title or "Contract"
-    subject = f"Contract review request: {title}"
+    subject = "Contract review request from ContractOps AI"
     body = (
         f"Hello {req.recipient_name},\n\n"
+        f"ContractOps AI has sent you a secure contract review request.\n\n"
         f"You have been invited to review a contract: {title}.\n\n"
     )
+    sender_name = getattr(req, "sender_name", None)
+    sender_email = getattr(req, "sender_email", None)
+    if sender_name or sender_email:
+        sender = sender_name or "Sender"
+        if sender_email:
+            sender += f" ({sender_email})"
+        body += f"Sent by: {sender}\n\n"
     if req.message:
         body += f"Message from sender:\n{req.message}\n\n"
     body += (
         f"Please open the secure link below to read the summary, risks, and key terms, "
         f"then approve, reject, or request changes.\n\n"
         f"{link}\n\n"
-        f"This link expires on {_iso(req.expires_at)}.\n"
+        f"This link expires on {_iso(req.expires_at)}.\n\n"
+        f"Do not forward this secure link.\n"
     )
     return {"subject": subject, "body": body, "review_link": link}
 
 
-def serialize_review_request(req: ReviewRequest, db: Session, *, include_token: bool = False) -> dict:
+def _review_delivery_history(req: ReviewRequest, db: Session) -> list[OutboundMessage]:
+    return (
+        db.query(OutboundMessage)
+        .filter_by(
+            contract_id=req.contract_id,
+            review_request_id=req.id,
+            message_type=REVIEW_INVITATION_MESSAGE_TYPE,
+        )
+        .order_by(OutboundMessage.created_at.asc(), OutboundMessage.id.asc())
+        .all()
+    )
+
+
+def serialize_review_request(
+    req: ReviewRequest,
+    db: Session,
+    *,
+    include_token: bool = False,
+    include_delivery: bool = False,
+) -> dict:
     comments = (
         db.query(ReviewComment)
         .filter_by(review_request_id=req.id)
@@ -538,9 +595,149 @@ def serialize_review_request(req: ReviewRequest, db: Session, *, include_token: 
         "next_allowed_actions": next_allowed_actions,
     }
     if include_token:
-        out["token"] = req.token
-        out["review_link"] = review_link(req.token)
+        public_token = public_token_for_request(req)
+        out["token"] = public_token
+        out["review_link"] = review_link(public_token)
+    if include_delivery:
+        deliveries = _review_delivery_history(req, db)
+        out["delivery"] = serialize_delivery(deliveries[-1] if deliveries else None)
+        out["delivery_history"] = [serialize_delivery(row) for row in deliveries]
     return out
+
+
+def _review_email_bodies(email: dict) -> tuple[str, str]:
+    text_body = email["body"]
+    escaped_link = html.escape(email["review_link"], quote=True)
+    html_body = (
+        "<html><body><p>"
+        + html.escape(text_body).replace("\n", "<br>")
+        + '</p><p><a href="'
+        + escaped_link
+        + '">Review Contract</a></p></body></html>'
+    )
+    return text_body, html_body
+
+
+def _review_delivery_response(
+    req: ReviewRequest,
+    contract: Contract,
+    delivery: OutboundMessage,
+    db: Session,
+) -> dict:
+    link = review_link(public_token_for_request(req))
+    email = build_email_template(req, contract, link)
+    return {
+        "review_link": link,
+        "email": email,
+        "request": serialize_review_request(
+            req,
+            db,
+            include_token=True,
+            include_delivery=True,
+        ),
+        "delivery": serialize_delivery(delivery),
+    }
+
+
+def create_review_email(
+    contract: Contract,
+    db: Session,
+    *,
+    actor: str,
+    recipient_name: str,
+    recipient_email: str,
+    message: str | None = None,
+    sender_name: str | None = None,
+    sender_email: str | None = None,
+    expires_in_days: int = DEFAULT_EXPIRY_DAYS,
+) -> dict:
+    """Commit the review and pending attempt before crossing the SMTP boundary."""
+    try:
+        req = create_review_request(
+            contract,
+            db,
+            actor=actor,
+            recipient_name=recipient_name,
+            recipient_email=recipient_email,
+            message=message,
+            sender_name=sender_name,
+            sender_email=sender_email,
+            expires_in_days=expires_in_days,
+            commit=False,
+        )
+        link = review_link(public_token_for_request(req))
+        email = build_email_template(req, contract, link)
+        pending = create_pending_attempt(
+            db,
+            message_type=REVIEW_INVITATION_MESSAGE_TYPE,
+            recipient=req.recipient_email,
+            subject=email["subject"],
+            contract_id=req.contract_id,
+            review_request_id=req.id,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    text_body, html_body = _review_email_bodies(email)
+    delivery = deliver_pending_attempt(
+        pending.id,
+        db,
+        recipient=req.recipient_email,
+        subject=email["subject"],
+        text_body=text_body,
+        html_body=html_body,
+    )
+    return _review_delivery_response(req, contract, delivery, db)
+
+
+def resend_review_email(review_id, db: Session) -> dict:
+    """Create a new attempt for an existing actionable review and reusable link."""
+    try:
+        unlocked_req = db.get(ReviewRequest, review_id)
+        if unlocked_req is None:
+            _raise_review_error(404, "review_not_found")
+        contract = _lock_contract(unlocked_req.contract_id, db)
+        req = _lock_review(review_id, db)
+        if req.contract_id != contract.id:
+            _raise_review_error(409, "workflow_stale")
+        current = _locked_current_version(contract.id, db)
+        if _is_stale(req, current):
+            _raise_review_error(409, "workflow_stale")
+        if not can_respond(req):
+            _raise_review_error(409, "review_closed")
+        enforce_resend_cooldown(
+            db,
+            contract_id=req.contract_id,
+            message_type=REVIEW_INVITATION_MESSAGE_TYPE,
+            review_request_id=req.id,
+        )
+        link = review_link(public_token_for_request(req))
+        email = build_email_template(req, contract, link)
+        pending = create_pending_attempt(
+            db,
+            message_type=REVIEW_INVITATION_MESSAGE_TYPE,
+            recipient=req.recipient_email,
+            subject=email["subject"],
+            contract_id=req.contract_id,
+            review_request_id=req.id,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    text_body, html_body = _review_email_bodies(email)
+    delivery = deliver_pending_attempt(
+        pending.id,
+        db,
+        recipient=req.recipient_email,
+        subject=email["subject"],
+        text_body=text_body,
+        html_body=html_body,
+    )
+    return _review_delivery_response(req, contract, delivery, db)
 
 
 def create_review_request(
@@ -587,15 +784,17 @@ def create_review_request(
         if active is not None:
             _raise_review_error(409, "review_already_active")
 
-        token = generate_token()
-        while db.query(ReviewRequest).filter_by(token=token).first():
-            token = generate_token()
+        material = generate_token_material()
+        while db.query(ReviewRequest).filter_by(token_hash=material.token_hash).first():
+            material = generate_token_material()
 
         req = ReviewRequest(
             id=uuid.uuid4(),
             contract_id=contract.id,
             version_id=current.id,
-            token=token,
+            token=None,
+            token_nonce=material.nonce,
+            token_hash=material.token_hash,
             recipient_name=clean_name,
             recipient_email=clean_email,
             sender_name=sender_name,
@@ -645,7 +844,16 @@ def create_review_request(
 
 
 def get_request_by_token(token: str, db: Session) -> ReviewRequest | None:
-    return db.query(ReviewRequest).filter_by(token=token).first()
+    return (
+        db.query(ReviewRequest)
+        .filter(
+            or_(
+                ReviewRequest.token_hash == hash_token(token),
+                ReviewRequest.token == token,
+            )
+        )
+        .first()
+    )
 
 
 def build_public_payload(req: ReviewRequest, db: Session) -> dict:
@@ -894,7 +1102,15 @@ def list_reviews_for_contract(contract_id, db: Session) -> list[dict]:
         .order_by(ReviewRequest.created_at.desc())
         .all()
     )
-    return [serialize_review_request(r, db, include_token=True) for r in rows]
+    return [
+        serialize_review_request(
+            row,
+            db,
+            include_token=True,
+            include_delivery=True,
+        )
+        for row in rows
+    ]
 
 
 def reviews_dashboard_summary(db: Session, *, skip_expire: bool = False) -> list[dict]:

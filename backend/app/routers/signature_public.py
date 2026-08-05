@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..services import signature as sig_svc
+from ..services.email_delivery import EmailDeliveryError
+from ..services.lifecycle import LifecycleError
 from ..services.rate_limit import check_rate_limit
 
 router = APIRouter(tags=["signature-public"])
@@ -30,7 +32,13 @@ def _rate(request: Request, token: str) -> None:
         raise HTTPException(429, detail={"error": "rate_limited"})
 
 
-def _public_err(e: ValueError) -> HTTPException:
+def _public_err(e: Exception) -> HTTPException:
+    if isinstance(e, sig_svc.SignatureError):
+        return HTTPException(e.status_code, detail=e.payload)
+    if isinstance(e, LifecycleError):
+        return HTTPException(e.status_code, detail=e.payload)
+    if isinstance(e, EmailDeliveryError):
+        return HTTPException(e.status_code, detail={"error": e.code})
     code = str(e)
     if code == "expired":
         return HTTPException(410, detail={"error": code})
@@ -46,7 +54,7 @@ def get_signer_bundle(token: str, request: Request, db: Session = Depends(get_db
     _rate(request, token)
     try:
         return sig_svc.build_public_payload(token, db)
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _public_err(e)
 
 
@@ -57,7 +65,7 @@ def open_signer(token: str, request: Request, db: Session = Depends(get_db)):
     ua = request.headers.get("user-agent")
     try:
         return sig_svc.open_signer(token, db, ip=ip, user_agent=ua)
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _public_err(e)
 
 
@@ -77,7 +85,7 @@ def submit_signer(token: str, body: SubmitBody, request: Request, db: Session = 
             ip=ip,
             user_agent=ua,
         )
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _public_err(e)
 
 
@@ -88,7 +96,7 @@ def decline_signer(token: str, body: DeclineBody, request: Request, db: Session 
     ua = request.headers.get("user-agent")
     try:
         return sig_svc.decline_signature(token, db, reason=body.reason, ip=ip, user_agent=ua)
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _public_err(e)
 
 
@@ -97,6 +105,6 @@ def signer_document(token: str, request: Request, db: Session = Depends(get_db))
     _rate(request, token)
     try:
         data = sig_svc.get_document_bytes(token, db)
-    except ValueError as e:
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
         raise _public_err(e)
     return Response(content=data, media_type="application/pdf")

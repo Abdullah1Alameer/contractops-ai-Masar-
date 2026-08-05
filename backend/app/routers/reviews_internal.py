@@ -8,14 +8,14 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import demo_role
 from ..models import Contract, ReviewRequest
+from ..services.email_delivery import EmailDeliveryError
 from ..services.lifecycle import LifecycleError
 from ..services.reviews import (
     ReviewError,
-    build_email_template,
     cancel_review,
-    create_review_request,
+    create_review_email,
     list_reviews_for_contract,
-    review_link,
+    resend_review_email,
     reviews_dashboard_summary,
     serialize_review_request,
 )
@@ -39,6 +39,8 @@ class CancelReviewBody(BaseModel):
 def _review_http_error(error: Exception):
     if isinstance(error, (ReviewError, LifecycleError)):
         raise HTTPException(error.status_code, detail=error.payload)
+    if isinstance(error, EmailDeliveryError):
+        raise HTTPException(error.status_code, detail={"error": error.code})
     raise error
 
 
@@ -53,7 +55,7 @@ def send_for_review(
     if contract is None:
         raise HTTPException(404, detail={"error": "review_not_found"})
     try:
-        req = create_review_request(
+        return create_review_email(
             contract,
             db,
             actor=actor,
@@ -64,16 +66,24 @@ def send_for_review(
             sender_email=body.sender_email,
             expires_in_days=body.expires_in_days,
         )
-    except (ReviewError, LifecycleError) as error:
+    except (ReviewError, LifecycleError, EmailDeliveryError) as error:
         _review_http_error(error)
 
-    link = review_link(req.token)
-    email = build_email_template(req, contract, link)
-    return {
-        "review_link": link,
-        "email": email,
-        "request": serialize_review_request(req, db, include_token=True),
-    }
+
+@router.post("/contracts/{contract_id}/reviews/{review_id}/resend")
+def resend_contract_review_email(
+    contract_id: _uuid.UUID,
+    review_id: _uuid.UUID,
+    db: Session = Depends(get_db),
+    _actor: str = Depends(demo_role),
+):
+    req = db.get(ReviewRequest, review_id)
+    if req is None or req.contract_id != contract_id:
+        raise HTTPException(404, detail={"error": "review_not_found"})
+    try:
+        return resend_review_email(review_id, db)
+    except (ReviewError, LifecycleError, EmailDeliveryError) as error:
+        _review_http_error(error)
 
 
 @router.post("/contracts/{contract_id}/reviews/{review_id}/cancel")

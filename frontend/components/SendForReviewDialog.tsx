@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
 
+import { useToast } from "@/components/feedback/ToastProvider";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import { apiErrorCode, sendContractForReview } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
-import type { SendReviewResponse } from "@/lib/types";
+import type { DeliveryStatus, SendReviewResponse } from "@/lib/types";
 
 export default function SendForReviewDialog({
   contractId,
@@ -20,6 +21,7 @@ export default function SendForReviewDialog({
   triggerLabel?: string;
 }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [recipientName, setRecipientName] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
@@ -28,9 +30,9 @@ export default function SendForReviewDialog({
   const [senderEmail, setSenderEmail] = useState("");
   const [expiresIn, setExpiresIn] = useState(14);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SendReviewResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
     setResult(null);
@@ -54,9 +56,24 @@ export default function SendForReviewDialog({
         expires_in_days: expiresIn,
       });
       setResult(res);
+      // Delivery is attempted after the review request already exists, so success
+      // must reflect the persisted delivery outcome — never claim "sent" for a
+      // failed, pending, sending, cancelled, or absent delivery row.
+      const deliveryStatus: DeliveryStatus | undefined = res.delivery?.status;
+      if (deliveryStatus === "sent") {
+        toast.success(t("review.send.successSent"));
+      } else if (deliveryStatus === "failed") {
+        toast.error(t("review.send.successFailed"));
+      } else {
+        toast.info(t("review.send.successPending"));
+      }
       onSent?.();
     } catch (caught) {
-      setError(apiErrorCode(caught));
+      // Kept as a persistent inline message (not just a transient toast) so the
+      // failure remains visible on the form even if the toast is dismissed.
+      const code = apiErrorCode(caught, t("common.error"));
+      setError(code);
+      toast.error(code);
     } finally {
       setBusy(false);
     }
@@ -64,9 +81,13 @@ export default function SendForReviewDialog({
 
   const copyLink = async () => {
     if (!result?.review_link) return;
-    await navigator.clipboard.writeText(result.review_link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(result.review_link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (caught) {
+      toast.error(apiErrorCode(caught, t("common.copyFailed")));
+    }
   };
 
   if (!open) {
@@ -83,7 +104,20 @@ export default function SendForReviewDialog({
         <h3 className="font-bold text-gray-900">{t("review.send.title")}</h3>
         {result ? (
           <div className="space-y-3">
-            <p className="text-sm text-success-700">{t("review.send.success")}</p>
+            {result.delivery?.status === "sent" ? (
+              <p className="text-sm text-success-700">{t("review.send.successSent")}</p>
+            ) : result.delivery?.status === "failed" ? (
+              <div className="rounded-lg border border-danger-200 bg-danger-50 p-3">
+                <p className="text-sm font-medium text-danger-700">{t("review.send.successFailed")}</p>
+                {result.delivery.safe_error_code && (
+                  <p className="mt-1 text-xs text-danger-600">
+                    {t("delivery.errorCode")}: {result.delivery.safe_error_code}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-warning-700">{t("review.send.successPending")}</p>
+            )}
             <div className="flex flex-wrap gap-2">
               <code className="flex-1 break-all rounded-lg bg-muted-50 px-3 py-2 text-xs">{result.review_link}</code>
               <Button variant="secondary" size="sm" onClick={copyLink}>
@@ -195,4 +229,17 @@ export function ReviewStatusBadge({ status }: { status: string }) {
             ? "neutral"
             : "info";
   return <Badge tone={tone}>{t(key)}</Badge>;
+}
+
+export function DeliveryStatusBadge({ status }: { status: DeliveryStatus }) {
+  const { t } = useI18n();
+  const tone =
+    status === "sent"
+      ? "success"
+      : status === "failed"
+        ? "danger"
+        : status === "cancelled"
+          ? "neutral"
+          : "warning";
+  return <Badge tone={tone}>{t(`delivery.status.${status}` as TKey)}</Badge>;
 }

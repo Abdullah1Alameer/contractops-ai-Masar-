@@ -564,6 +564,11 @@ _TRANSITION_RULES = (
     ),
     _rule(
         ContractStage.PARTIALLY_SIGNED,
+        LifecycleEvent.SIGNATURE_VIEWED,
+        ContractStage.PARTIALLY_SIGNED,
+    ),
+    _rule(
+        ContractStage.PARTIALLY_SIGNED,
         LifecycleEvent.SIGNATURE_PARTIALLY_SIGNED,
         ContractStage.PARTIALLY_SIGNED,
     ),

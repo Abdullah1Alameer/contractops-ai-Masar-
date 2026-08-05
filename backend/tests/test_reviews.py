@@ -12,6 +12,17 @@ def test_generate_token_unique():
     assert len(a) >= 32
 
 
+def test_review_token_is_reproducible_and_stored_as_hash(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "test-portal-secret")
+
+    material = rev.generate_token_material()
+    request = SimpleNamespace(token_nonce=material.nonce)
+
+    assert rev.public_token_for_request(request) == material.public_token
+    assert rev.hash_token(material.public_token) == material.token_hash
+    assert material.public_token != material.nonce
+
+
 def test_can_respond_open_states():
     assert rev.can_respond(SimpleNamespace(status="sent"))
     assert rev.can_respond(SimpleNamespace(status="opened"))
@@ -23,7 +34,7 @@ def test_can_respond_rejects_all_terminal_statuses():
         assert not rev.can_respond(SimpleNamespace(status=status))
 
 
-def test_build_email_template_includes_link():
+def test_build_email_template_uses_safe_subject_and_includes_link():
     req = SimpleNamespace(
         recipient_name="Client",
         message="Please review",
@@ -33,7 +44,8 @@ def test_build_email_template_includes_link():
     link = "http://localhost:3000/review/abc"
     email = rev.build_email_template(req, contract, link)
     assert link in email["body"]
-    assert "MSA 2026" in email["subject"]
+    assert email["subject"] == "Contract review request from ContractOps AI"
+    assert "MSA 2026" not in email["subject"]
     assert email["review_link"] == link
 
 

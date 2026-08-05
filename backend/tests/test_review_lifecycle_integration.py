@@ -1,27 +1,36 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event, text
 
-from app.db import SessionLocal
+from app.db import SessionLocal, engine
 from app.main import app
 from app.models import (
     ActivityEvent,
     Contract,
     ContractVersion,
     Negotiation,
+    OutboundMessage,
     ReviewRequest,
     ReviewResponse,
 )
 from app.services import reviews as review_service
+from app.services.email_delivery import EmailDeliveryResult
 
 
 AUTH = {
     "Authorization": "Bearer demo-secret-token",
     "X-Demo-Role": "legal",
 }
+
+
+@pytest.fixture(autouse=True)
+def portal_token_secret(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "review-integration-secret")
 
 
 @pytest.fixture
@@ -110,8 +119,16 @@ def test_create_review_transitions_and_persists_both_events(review_db):
 
     db.refresh(contract)
     request = db.get(ReviewRequest, payload["request"]["id"])
+    public_token = payload["request"]["token"]
+    expected_link = f"http://localhost:3000/review/{public_token}"
 
     assert request is not None
+    assert request.token is None
+    assert request.token_hash == review_service.hash_token(public_token)
+    assert payload["review_link"] == expected_link
+    assert payload["request"]["review_link"] == expected_link
+    assert expected_link in payload["email"]["body"]
+    assert "/review/None" not in str(payload)
     assert request.status == "sent"
     assert request.version_id == version.id
     assert contract.stage == "client_review"
@@ -337,9 +354,10 @@ def test_expiry_transitions_current_review_once(review_db):
     request.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     db.commit()
     client = TestClient(app)
+    public_token = sent["request"]["token"]
 
-    first = client.get(f"/api/review/{request.token}")
-    second = client.get(f"/api/review/{request.token}")
+    first = client.get(f"/api/review/{public_token}")
+    second = client.get(f"/api/review/{public_token}")
 
     assert first.status_code == 200
     assert first.json()["status"] == "expired"
@@ -470,3 +488,286 @@ def test_review_serialization_and_workflow_summary_read_back(review_db):
     assert portal["actionable"] is True
     assert portal["is_stale"] is False
     assert "token" not in portal
+
+
+def test_smtp_failure_preserves_review_link_and_records_safe_delivery(
+    review_db, monkeypatch
+):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    contract.title = "Synthetic <Contract & Terms>"
+    db.commit()
+    delivered_content = {}
+
+    def fail_delivery(**kwargs):
+        delivered_content.update(kwargs)
+        return EmailDeliveryResult("failed", None, "smtp_connection_failed", None)
+
+    monkeypatch.setattr("app.services.outbound_messages.send_email", fail_delivery)
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/review/send",
+        headers=AUTH,
+        json={
+            "recipient_name": "Synthetic Reviewer",
+            "recipient_email": "reviewer@example.invalid",
+            "sender_name": "Synthetic Sender",
+            "sender_email": "sender@example.invalid",
+            "message": '<script>alert("review")</script>',
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["delivery"]["status"] == "failed"
+    assert payload["delivery"]["safe_error_code"] == "smtp_connection_failed"
+    assert payload["request"]["delivery"]["id"] == payload["delivery"]["id"]
+    assert payload["request"]["delivery_history"] == [payload["delivery"]]
+    db.expire_all()
+    request = db.get(ReviewRequest, payload["request"]["id"])
+    assert request is not None
+    assert request.status == "sent"
+    assert db.get(Contract, contract.id).stage == "client_review"
+    assert db.query(OutboundMessage).filter_by(review_request_id=request.id).one().status == "failed"
+    assert payload["review_link"] == review_service.review_link(
+        review_service.public_token_for_request(request)
+    )
+    assert all(payload["request"]["token"] not in str(event.event_metadata) for event in _events(db, contract.id))
+    assert "ContractOps AI" in delivered_content["text_body"]
+    assert "Synthetic Sender (sender@example.invalid)" in delivered_content["text_body"]
+    assert "Do not forward" in delivered_content["text_body"]
+    assert delivered_content["subject"] == "Contract review request from ContractOps AI"
+    assert contract.title not in delivered_content["subject"]
+    assert payload["delivery"]["subject"] == delivered_content["subject"]
+    assert (
+        f'<a href="{payload["review_link"]}">Review Contract</a>'
+        in delivered_content["html_body"]
+    )
+    assert payload["review_link"] in delivered_content["text_body"]
+    assert "<script>" not in delivered_content["html_body"]
+    assert "Synthetic <Contract" not in delivered_content["html_body"]
+    assert (
+        "&lt;script&gt;alert(&quot;review&quot;)&lt;/script&gt;"
+        in delivered_content["html_body"]
+    )
+    assert (
+        "Synthetic &lt;Contract &amp; Terms&gt;"
+        in delivered_content["html_body"]
+    )
+
+
+def test_resend_reuses_review_and_token_without_lifecycle_transition(
+    review_db, monkeypatch
+):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("failed", None, "smtp_send_failed", None),
+    )
+    sent = _send(TestClient(app), contract.id)
+    review_id = sent["request"]["id"]
+    event_names = _event_names(db, contract.id)
+    db.execute(
+        text(
+            "UPDATE outbound_messages SET created_at = :created_at "
+            "WHERE review_request_id = :review_id"
+        ),
+        {
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=2),
+            "review_id": review_id,
+        },
+    )
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult(
+            "sent", "smtp-message-123", None, datetime.now(timezone.utc)
+        ),
+    )
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/reviews/{review_id}/resend",
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["review_link"] == sent["review_link"]
+    assert payload["request"]["id"] == review_id
+    assert payload["request"]["token"] == sent["request"]["token"]
+    assert payload["delivery"]["status"] == "sent"
+    assert len(payload["request"]["delivery_history"]) == 2
+    db.expire_all()
+    assert db.query(ReviewRequest).filter_by(contract_id=contract.id).count() == 1
+    assert db.query(OutboundMessage).filter_by(review_request_id=review_id).count() == 2
+    assert db.get(Contract, contract.id).stage == "client_review"
+    assert _event_names(db, contract.id) == event_names
+
+    history = TestClient(app).get(
+        f"/api/contracts/{contract.id}/reviews",
+        headers=AUTH,
+    )
+    assert history.status_code == 200
+    listed = history.json()[0]
+    assert listed["delivery"]["status"] == "sent"
+    assert [row["status"] for row in listed["delivery_history"]] == ["failed", "sent"]
+
+
+def test_review_resend_cooldown_is_deterministic(review_db, monkeypatch):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("failed", None, "smtp_send_failed", None),
+    )
+    sent = _send(TestClient(app), contract.id)
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/reviews/{sent['request']['id']}/resend",
+        headers=AUTH,
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == {"error": "email_resend_cooldown"}
+    assert db.query(ReviewRequest).filter_by(contract_id=contract.id).count() == 1
+    assert db.query(OutboundMessage).filter_by(review_request_id=sent["request"]["id"]).count() == 1
+
+
+def test_review_resend_locks_contract_review_then_current_version(
+    review_db, monkeypatch
+):
+    db, create_contract = review_db
+    contract, _ = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("failed", None, "smtp_send_failed", None),
+    )
+    sent = _send(TestClient(app), contract.id)
+    db.execute(
+        text(
+            "UPDATE outbound_messages SET created_at = :created_at "
+            "WHERE review_request_id = :review_id"
+        ),
+        {
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=2),
+            "review_id": sent["request"]["id"],
+        },
+    )
+    db.commit()
+    locked_tables = []
+
+    def capture_locks(_connection, _cursor, statement, _parameters, _context, _many):
+        normalized = " ".join(statement.lower().split())
+        if "for update" not in normalized:
+            return
+        for table in ("contracts", "review_requests", "contract_versions"):
+            if f"from {table}" in normalized:
+                locked_tables.append(table)
+                break
+
+    event.listen(engine, "before_cursor_execute", capture_locks)
+    try:
+        response = TestClient(app).post(
+            f"/api/contracts/{contract.id}/reviews/{sent['request']['id']}/resend",
+            headers=AUTH,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_locks)
+
+    assert response.status_code == 200
+    assert locked_tables[:3] == [
+        "contracts",
+        "review_requests",
+        "contract_versions",
+    ]
+
+
+def test_localhost_public_url_failure_is_recorded_without_raw_exception(
+    review_db, monkeypatch
+):
+    _db, create_contract = review_db
+    contract, _ = create_contract()
+    smtp_env = {
+        "APP_ENV": "demo",
+        "EMAIL_DELIVERY_ENABLED": "true",
+        "SMTP_HOST": "smtp.example.com",
+        "SMTP_PORT": "587",
+        "SMTP_FROM_EMAIL": "sender@example.com",
+        "SMTP_USE_TLS": "true",
+        "SMTP_USE_SSL": "false",
+        "PUBLIC_APP_URL": "http://localhost:3000",
+    }
+    for key, value in smtp_env.items():
+        monkeypatch.setenv(key, value)
+
+    response = TestClient(app).post(
+        f"/api/contracts/{contract.id}/review/send",
+        headers=AUTH,
+        json={
+            "recipient_name": "Synthetic Reviewer",
+            "recipient_email": "reviewer@example.invalid",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["delivery"]["status"] == "failed"
+    assert response.json()["delivery"]["safe_error_code"] == "public_app_url_invalid"
+
+
+def test_public_review_rate_limit_uses_ip_and_hashed_token_buckets(
+    review_db, monkeypatch
+):
+    _db, create_contract = review_db
+    contract, _ = create_contract()
+    sent = _send(TestClient(app), contract.id)
+    token = sent["request"]["token"]
+    captured = []
+
+    def allow(key):
+        captured.append(key)
+        return True
+
+    monkeypatch.setattr("app.routers.reviews_public.check_rate_limit", allow)
+
+    response = TestClient(app).get(f"/api/review/{token}")
+
+    assert response.status_code == 200
+    assert captured == [
+        "review-ip:testclient",
+        (
+            "review-token:testclient:"
+            + hashlib.sha256(token.encode("utf-8")).hexdigest()
+        ),
+    ]
+    assert all(token not in key for key in captured)
+
+
+def test_public_review_ip_bucket_throttles_rotating_invalid_tokens(
+    review_db, monkeypatch
+):
+    _db, _create_contract = review_db
+    ip_hits = 0
+    captured = []
+
+    def limit_second_ip_hit(key):
+        nonlocal ip_hits
+        captured.append(key)
+        if key == "review-ip:testclient":
+            ip_hits += 1
+            return ip_hits == 1
+        return True
+
+    monkeypatch.setattr(
+        "app.routers.reviews_public.check_rate_limit",
+        limit_second_ip_hit,
+    )
+
+    first = TestClient(app).get("/api/review/invalid-token-one")
+    second = TestClient(app).get("/api/review/invalid-token-two")
+
+    assert first.status_code == 404
+    assert second.status_code == 429
+    assert second.json()["detail"] == {"error": "rate_limited"}
+    assert captured.count("review-ip:testclient") == 2
+    assert all("invalid-token" not in key for key in captured)

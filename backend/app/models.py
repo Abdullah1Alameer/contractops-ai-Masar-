@@ -303,7 +303,9 @@ class ReviewRequest(Base):
     id = _uuid_pk()
     contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
     version_id = Column(UUID(as_uuid=True), ForeignKey("contract_versions.id", ondelete="SET NULL"), nullable=True)
-    token = Column(Text, nullable=False, unique=True)
+    token = Column(Text, nullable=True, unique=True)
+    token_nonce = Column(Text, nullable=True)
+    token_hash = Column(Text, nullable=True, unique=True)
     recipient_name = Column(Text, nullable=False)
     recipient_email = Column(Text, nullable=False)
     sender_name = Column(Text, nullable=True)
@@ -463,6 +465,7 @@ class SignatureSigner(Base):
     email = Column(Text, nullable=False)
     role = Column(Text, nullable=False)
     token_hash = Column(Text, nullable=False, unique=True)
+    token_nonce = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="waiting")
     opened_at = Column(DateTime(timezone=True), nullable=True)
     signed_at = Column(DateTime(timezone=True), nullable=True)
@@ -475,6 +478,33 @@ class SignatureSigner(Base):
     user_agent = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class OutboundMessage(Base):
+    __tablename__ = "outbound_messages"
+    id = _uuid_pk()
+    message_type = Column(Text, nullable=False)
+    recipient = Column(Text, nullable=False)
+    subject = Column(Text, nullable=False)
+    contract_id = Column(
+        UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False
+    )
+    review_request_id = Column(
+        UUID(as_uuid=True), ForeignKey("review_requests.id", ondelete="CASCADE"), nullable=True
+    )
+    signature_request_id = Column(
+        UUID(as_uuid=True), ForeignKey("signature_requests.id", ondelete="CASCADE"), nullable=True
+    )
+    signer_id = Column(
+        UUID(as_uuid=True), ForeignKey("signature_signers.id", ondelete="CASCADE"), nullable=True
+    )
+    status = Column(Text, nullable=False, default="pending")
+    attempt_count = Column(Integer, nullable=False, default=0)
+    provider_message_id = Column(Text, nullable=True)
+    safe_error_code = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class LegalPlaybook(Base):

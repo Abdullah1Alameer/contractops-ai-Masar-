@@ -36,6 +36,11 @@ AI_RESULT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def portal_token_secret(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "negotiation-integration-secret")
+
+
 @pytest.fixture
 def negotiation_db():
     db = SessionLocal()
@@ -252,6 +257,14 @@ def test_counterproposal_send_is_atomic_and_idempotent(negotiation_db):
     second = client.post(f"/api/negotiations/{negotiation.id}/send", headers=AUTH)
 
     assert first.status_code == 200, first.text
+    first_payload = first.json()
+    public_token = first_payload["request"]["token"]
+    expected_link = f"http://localhost:3000/review/{public_token}"
+    assert first_payload["review_link"] == expected_link
+    assert first_payload["request"]["review_link"] == expected_link
+    assert first_payload["negotiation"]["final_summary"]["review_link"] == expected_link
+    assert expected_link in first_payload["email"]["body"]
+    assert "/review/None" not in str(first_payload)
     assert second.status_code == 409
     assert second.json()["detail"]["error"] == "followup_review_already_active"
     db.expire_all()
@@ -265,6 +278,7 @@ def test_counterproposal_send_is_atomic_and_idempotent(negotiation_db):
     assert stored.workflow_status == "sent_to_client"
     assert stored.status == "sent"
     assert stored.sent_review_request_id is not None
+    assert stored.final_summary["review_link"] == expected_link
     assert len(reviews) == 2
     assert db.get(Contract, contract.id).stage == "negotiation"
     assert _events(db, contract.id).count("counterproposal_sent") == 1

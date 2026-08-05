@@ -1,13 +1,14 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import SendForReviewDialog from "@/components/SendForReviewDialog";
-import { ReviewStatusBadge } from "@/components/SendForReviewDialog";
+import SendForReviewDialog, { DeliveryStatusBadge, ReviewStatusBadge } from "@/components/SendForReviewDialog";
+import { useToast } from "@/components/feedback/ToastProvider";
+import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import StageBadge from "@/components/ui/StageBadge";
 import { SkeletonCard } from "@/components/ui/Skeleton";
-import { fetchContractReviews, fetchVersions } from "@/lib/api";
+import { apiErrorCode, fetchContractReviews, fetchVersions, resendContractReview } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import type { ContractVersionRow, ReviewRequestRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -20,9 +21,12 @@ export default function ReviewHistoryPanel({
   highlightId?: string | null;
 }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [rows, setRows] = useState<ReviewRequestRow[]>([]);
   const [versions, setVersions] = useState<ContractVersionRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -46,6 +50,37 @@ export default function ReviewHistoryPanel({
     if (!versionId) return "—";
     const v = versions.find((x) => x.id === versionId);
     return v?.version_label ?? "—";
+  };
+
+  const retry = async (reviewId: string) => {
+    setRetrying(reviewId);
+    try {
+      const res = await resendContractReview(contractId, reviewId);
+      load();
+      // A resend can itself fail or still be in flight; never announce success
+      // unless the persisted attempt actually reports "sent".
+      if (res.delivery?.status === "sent") {
+        toast.success(t("review.retrySuccess"));
+      } else if (res.delivery?.status === "failed") {
+        toast.error(t("review.retryFailed"));
+      } else {
+        toast.info(t("review.retryPending"));
+      }
+    } catch (caught) {
+      toast.error(apiErrorCode(caught, t("common.error")));
+    } finally {
+      setRetrying(null);
+    }
+  };
+
+  const copyLink = async (reviewId: string, link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedId(reviewId);
+      setTimeout(() => setCopiedId((current) => (current === reviewId ? null : current)), 2000);
+    } catch (caught) {
+      toast.error(apiErrorCode(caught, t("common.copyFailed")));
+    }
   };
 
   if (loading) return <SkeletonCard rows={3} />;
@@ -96,7 +131,44 @@ export default function ReviewHistoryPanel({
                 {r.overall_comment ? `: ${r.overall_comment}` : ""}
               </p>
             )}
+            {r.delivery && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-muted-50/40 p-2 text-xs text-gray-600">
+                <DeliveryStatusBadge status={r.delivery.status} />
+                <span>
+                  {t("delivery.attempts")}: {r.delivery.attempt_count}
+                </span>
+                {r.delivery.status === "sent" && r.delivery.sent_at && (
+                  <span>
+                    {t("delivery.sentAt")}: {r.delivery.sent_at.slice(0, 19)}
+                  </span>
+                )}
+                {r.delivery.status === "failed" && (
+                  <span>
+                    {t("delivery.failedAt")}: {r.delivery.failed_at?.slice(0, 19) ?? "—"}
+                    {r.delivery.safe_error_code ? ` · ${r.delivery.safe_error_code}` : ""}
+                  </span>
+                )}
+              </div>
+            )}
             {r.review_link && <p className="break-all text-xs text-brand-700">{r.review_link}</p>}
+            <div className="flex flex-wrap gap-2">
+              {r.actionable && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={retrying === r.id}
+                  disabled={retrying !== null}
+                  onClick={() => retry(r.id)}
+                >
+                  {t("review.retryEmail")}
+                </Button>
+              )}
+              {r.review_link && (
+                <Button variant="secondary" size="sm" onClick={() => copyLink(r.id, r.review_link!)}>
+                  {copiedId === r.id ? t("review.send.copied") : t("review.send.copyLink")}
+                </Button>
+              )}
+            </div>
             {r.comments.length > 0 && (
               <ul className="mt-2 space-y-1 border-t pt-2">
                 {r.comments.map((c) => (

@@ -58,8 +58,119 @@
       "method": "POST",
       "path": "/api/contracts",
       "expected_status": 201,
-      "actual_status": 422,
-      "pass": false,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null,
+      "contract_id": "93f4a440-b82d-4c60-afb0-4ae7e9431a24"
+    },
+    {
+      "name": "POST /api/contracts disposable",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 201,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null,
+      "contract_id": "8009d504-860f-45ff-a379-9557962d52b7"
+    },
+    {
+      "name": "GET /api/contracts/{id}",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET obligations pre-extract",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/obligations",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST /extract supported subcontract",
+      "method": "POST",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/extract",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null,
+      "duration_ms": 27097.0
+    },
+    {
+      "name": "GET /deadlines",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/deadlines",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST deadlines/rebuild",
+      "method": "POST",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/deadlines/rebuild",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /milestones",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/milestones",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "PATCH /obligations/{id}",
+      "method": "PATCH",
+      "path": "/api/obligations/b54b8449-dca4-4a1e-bc87-b57ffa90b5bc",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST /events",
+      "method": "POST",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/events",
+      "expected_status": 201,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "GET /raw page=1",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/raw",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST employment docx",
+      "method": "POST",
+      "path": "/api/contracts",
+      "expected_status": 201,
+      "actual_status": 201,
+      "pass": true,
+      "placeholder": null
+    },
+    {
+      "name": "POST /extract employment",
+      "method": "POST",
+      "path": "/api/contracts/ae9fb383-9b78-41b2-b2d9-32283cadb6f6/extract",
+      "expected_status": 200,
+      "actual_status": 200,
+      "pass": true,
       "placeholder": null
     },
     {
@@ -88,7 +199,16 @@
       "actual_status": 422,
       "pass": false,
       "placeholder": null,
-      "duration_ms": 642.0
+      "duration_ms": 310.0
+    },
+    {
+      "name": "DELETE /api/contracts/{id}",
+      "method": "DELETE",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7",
+      "expected_status": 204,
+      "actual_status": 204,
+      "pass": true,
+      "placeholder": null
     }
   ],
   "negative": [
@@ -113,7 +233,7 @@
     {
       "name": "GET unknown contract",
       "method": "GET",
-      "path": "/api/contracts/31e4e15a-fa74-43d4-9703-ff3994a498e4",
+      "path": "/api/contracts/56229cb8-004a-4769-9af8-daf7805e62d2",
       "expected_status": 404,
       "actual_status": 404,
       "pass": true,
@@ -156,6 +276,15 @@
       "placeholder": null
     },
     {
+      "name": "GET deadlines not ready",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7/deadlines",
+      "expected_status": 409,
+      "actual_status": 409,
+      "pass": true,
+      "placeholder": null
+    },
+    {
       "name": "POST flowdown wrong pair",
       "method": "POST",
       "path": "/api/flowdown",
@@ -174,9 +303,18 @@
       "placeholder": null
     },
     {
+      "name": "GET deleted contract",
+      "method": "GET",
+      "path": "/api/contracts/8009d504-860f-45ff-a379-9557962d52b7",
+      "expected_status": 404,
+      "actual_status": 404,
+      "pass": true,
+      "placeholder": null
+    },
+    {
       "name": "PATCH unknown milestone",
       "method": "PATCH",
-      "path": "/api/milestones/b91e0615-0902-48a5-ab86-52998a77676f",
+      "path": "/api/milestones/a91352e8-a0ba-4489-9c1e-1269dbf01959",
       "expected_status": 404,
       "actual_status": 404,
       "pass": true,
@@ -184,6 +322,29 @@
     }
   ],
   "db_integrity": [
+    {
+      "name": "Arabic title round-trip",
+      "pass": true,
+      "title": "عقد اختبار QA"
+    },
+    {
+      "name": "deadline rebuild idempotent count",
+      "pass": true,
+      "counts": [
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "name": "milestone rebuild idempotent count",
+      "pass": true,
+      "counts": [
+        0,
+        0,
+        0
+      ]
+    },
     {
       "name": "orphan clauses",
       "pass": true,
@@ -213,25 +374,102 @@
       "name": "orphan payment_milestones",
       "pass": true,
       "count": 0
+    },
+    {
+      "name": "delete cascade",
+      "pass": true,
+      "before": {
+        "clauses": 9,
+        "extractions": 15,
+        "obligations": 4,
+        "deadlines": 3,
+        "events": 1,
+        "payment_milestones": 0
+      },
+      "after": {
+        "clauses": 0,
+        "extractions": 0,
+        "obligations": 0,
+        "deadlines": 0,
+        "events": 0,
+        "payment_milestones": 0
+      }
     }
   ],
   "perf_ms": {
-    "GET /api/contracts": 2923.7,
-    "GET /flowdown cached": 965.5
+    "GET /api/contracts": 954.0,
+    "GET /api/contracts/{id}": 3006.0,
+    "GET /deadlines": 530.0,
+    "GET /milestones": 542.5,
+    "GET /flowdown cached": 502.8
   },
   "ai": {
+    "supported_extract": {
+      "status": 200,
+      "duration_ms": 27097.0,
+      "body": {
+        "status": "ready",
+        "supported": true,
+        "contract_id": "8009d504-860f-45ff-a379-9557962d52b7",
+        "counts": {
+          "clauses": 9,
+          "obligations": 4,
+          "notice_periods": 2,
+          "milestones": 0
+        },
+        "needs_review": [
+          {
+            "field": "retention_pct",
+            "reason": "low_confidence",
+            "confidence": 0
+          },
+          {
+            "field": "commencement_date",
+            "reason": "low_confidence",
+            "confidence": 0
+          },
+          {
+            "field": "bond_expiry",
+            "reason": "low_confidence",
+            "confidence": 0
+          },
+          {
+            "field": "warranty_end",
+            "reason": "low_confidence",
+            "confidence": 0
+          }
+        ],
+        "pipeline_report": {
+          "total_items": 9,
+          "verified_items": 9,
+          "failed_quotes": [],
+          "chunks": 1,
+          "fail_ratio": 0.0
+        }
+      }
+    },
+    "supported_checks": {
+      "supported": true,
+      "category": null,
+      "status": "ready"
+    },
+    "employment": {
+      "supported": true,
+      "category": null
+    },
+    "employment_obligations_after_block": 0,
     "flowdown": {
       "status": 422,
-      "duration_ms": 642.0
+      "duration_ms": 310.0
     }
   },
   "errors": [],
   "summary": {
-    "endpoints_pass": 7,
-    "endpoints_fail": 2,
-    "negative_pass": 10,
-    "negative_total": 10,
-    "db_integrity_pass": 6,
-    "db_integrity_total": 6
+    "endpoints_pass": 21,
+    "endpoints_fail": 1,
+    "negative_pass": 12,
+    "negative_total": 12,
+    "db_integrity_pass": 10,
+    "db_integrity_total": 10
   }
 }
