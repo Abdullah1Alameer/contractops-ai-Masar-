@@ -212,3 +212,164 @@ pytest tests/test_signature_lifecycle_integration.py tests/test_signature.py tes
 npx tsc --noEmit && npm test
 TypeScript passed; 20 frontend tests passed
 ```
+
+## Fix round 4
+
+### Findings addressed
+
+- **Artifact regression (critical).** Signed-PDF and certificate downloads were nested inside
+  the `contractStage === "signed"` branch, so activating a contract removed the executed
+  documents from the panel. Downloads are now gated on the completed request and the
+  presence of each artifact reference, so they survive `signed`, `active`, and every later
+  stage. Only the activation form stays gated to a `signed`, not-yet-activated contract.
+- **Activation audit privacy.** `activate_contract` passed the raw operator `reason` and
+  `evidence` into `LifecycleService.transition()`, which copies transition metadata into the
+  persisted `contract_activated` activity row. Activation now records
+  `activation_ready`/`reason_present`/`evidence_present` plus keyed, truncated
+  `reason_fingerprint`/`evidence_fingerprint` values. Both inputs remain mandatory at the
+  service boundary; only the raw text is dropped. Fingerprints are emitted solely when the
+  deployment secret is configured, because a plain digest of short free text is recoverable.
+- **Missing activation API cases.** Added persisted `activation_not_ready` and
+  `workflow_stale` 409 cases that assert the exact error code, unchanged contract stage,
+  unchanged request status, and a byte-identical activity event list.
+- **Lifecycle refresh.** `SignaturePanel` now accepts
+  `onLifecycleChange?: () => void | Promise<void>` and the contract page passes its `load`
+  callback, matching `ApprovalsPanel`. Successful send, cancel, and activation await the
+  callback so the stage badge and stepper refresh; the refreshed `active` stage removes the
+  activation form.
+- **UI quality.** Success toasts for send/cancel/activate, deterministic `apiErrorCode`
+  error surfacing on every action including downloads and resend, distinct bilingual
+  validation strings for a missing activation reason, missing activation evidence, and a
+  missing cancellation reason, styled bordered fields inside labelled cards, and per-action
+  `loading`/`disabled` state that blocks concurrent submissions.
+
+### Strict TDD evidence
+
+#### Backend RED
+
+Command:
+
+```text
+cd backend && python -m pytest tests/test_signature_lifecycle_integration.py -q -k "activation_never_persists or activation_not_ready or stale_request_returns_workflow_stale" -p no:warnings
+```
+
+Output:
+
+```text
+>           assert raw_reason not in payload
+E           assert 'Counterpart...yla Al-Harbi' not in "{'to': 'act...eady': True}"
+E
+E             'Counterparty count... CFO Layla Al-Harbi' is contained here:
+E               reason': 'Counterparty countersigned on 2026-04-01 per CFO Layla Al-Harbi', 'evidence': 'Scanned wet-ink page stored at vault://legal/482-secret', 'request_id': '6846b410-1820-46f2-9574-07dc05555bb7', 'version_id': 'de66f236-0049-4fe2-aa4a-085ef00f402b', 'current_version': True, 'activation_ready': True}
+
+tests/test_signature_lifecycle_integration.py:541: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_signature_lifecycle_integration.py::test_activation_never_persists_raw_reason_or_evidence
+1 failed, 2 passed, 14 deselected in 10.28s
+```
+
+The two new 409 cases passed on first run: they lock in already-correct guard behavior that
+had no persisted API-level coverage, so only the metadata leak was genuinely red.
+
+#### Backend GREEN
+
+```text
+cd backend && python -m pytest tests/test_signature_lifecycle_integration.py -q -k "activation_never_persists or activation_not_ready or stale_request_returns_workflow_stale" -p no:warnings
+3 passed, 14 deselected in 10.47s
+```
+
+Required regression command:
+
+```text
+cd backend && python -m pytest tests/test_signature_lifecycle_integration.py tests/test_signature.py tests/test_lifecycle.py tests/test_approval_lifecycle_integration.py tests/test_outbound_messages.py -q -p no:warnings
+106 passed in 249.93s (0:04:09)
+```
+
+#### Frontend RED
+
+`frontend/components/SignaturePanel.vitest.tsx` is collected by the existing
+`include: ["**/*.vitest.tsx", "**/*.vitest.ts"]` config. RED was captured by stashing only
+the three implementation files (`SignaturePanel.tsx`, `i18n.tsx`, `contracts/[id]/page.tsx`)
+and keeping the new test:
+
+```text
+cd frontend && npx vitest run components/SignaturePanel.vitest.tsx --reporter=basic
+  × keeps signed artifact downloads on an active contract while hiding the activation form
+    → Unable to find an element with the text: تنزيل العقد الموقّع.
+  × keeps signed artifact downloads on a stage that follows activation
+    → Unable to find an element with the text: تنزيل العقد الموقّع.
+  ✓ offers artifact downloads and the activation form on a signed contract
+  × downloads the signed contract and the certificate for the completed request
+    → Unable to find an element with the text: تنزيل العقد الموقّع.
+  × blocks activation and reports each missing field distinctly
+    → expected "spy" to be called with arguments: [ 'سبب التفعيل مطلوب قبل تفعيل العقد' ]
+  × sends the trimmed reason and evidence, refreshes the lifecycle, and confirms success
+    → expected "spy" to be called at least once
+  × surfaces the backend error code and leaves the lifecycle untouched
+    → expected "spy" to be called with arguments: [ 'activation_not_ready' ]
+  × hides the activation form once the reloaded contract is active
+    → Unable to find an element with the text: تنزيل العقد الموقّع.
+  × requires a reason, then submits it and refreshes the lifecycle
+    → expected "spy" to be called with arguments: [ 'سبب الإلغاء مطلوب قبل إلغاء الطلب' ]
+
+ Test Files  1 failed (1)
+      Tests  8 failed | 1 passed (9)
+```
+
+The one passing case is the `signed`-stage baseline, which the previous round already
+satisfied; the eight failures are exactly the round 4 findings.
+
+#### Frontend GREEN
+
+```text
+cd frontend && npx vitest run --reporter=basic
+ ✓ components/SourceViewer.ssr.vitest.ts (2 tests) 263ms
+ ✓ lib/pipeline.vitest.ts (11 tests) 5ms
+ ✓ lib/api.vitest.ts (2 tests) 2ms
+ ✓ components/contract/AiSummaryPanel.vitest.tsx (1 test) 29ms
+ ✓ components/SourceViewer.vitest.tsx (4 tests) 49ms
+ ✓ components/SignaturePanel.vitest.tsx (9 tests) 99ms
+
+ Test Files  6 passed (6)
+      Tests  29 passed (29)
+```
+
+TypeScript and the production Next.js build:
+
+```text
+cd frontend && npx tsc --noEmit
+TSC_OK
+
+cd frontend && npm run build
+ ✓ Compiled successfully
+ ✓ Generating static pages (19/19)
+```
+
+### Self-review
+
+- Grepped `signature.py` for transition metadata carrying `reason`, `evidence`, `token`,
+  `signature_value`, or `email`. The only remaining raw value is the signer-authored
+  decline reason, which the lifecycle rule requires as a mandatory field and which the
+  product already exposes as `decline_reason`.
+- No raw tokens, reasons, or evidence are logged client side: every error path surfaces
+  only the deterministic backend error code through `apiErrorCode`.
+- Activation fingerprints are keyed HMAC-SHA256 truncated to 16 hex characters, so they
+  correlate repeated attestations without being reversible from the audit trail.
+- Reset the local `activated` guard on `contractId` change so the flag cannot leak across
+  contracts when the panel instance is reused.
+- The new frontend test registers `afterEach(cleanup)` explicitly, because the project
+  vitest config does not enable `globals`, so Testing Library auto-cleanup is not installed.
+  Without it, leaked DOM from a previous render produces false duplicate-element failures.
+
+### Concerns
+
+- The activation fingerprint reuses `PORTAL_TOKEN_SECRET` as its HMAC key, since that is
+  the only deployment secret currently exposed by `get_email_delivery_settings()`. A
+  dedicated audit-fingerprint secret would be cleaner if audit hashing spreads to other
+  workflows.
+- Raw signer decline reasons and approval comments still persist in activity metadata by
+  design. If the privacy rule is meant to cover all operator free text, that is a
+  separate lifecycle-wide change spanning the approval and review services.
+- `npm run lint` is not usable in this repository: `next lint` has no committed ESLint
+  configuration and drops into an interactive setup prompt. Verification relied on
+  `tsc --noEmit`, `vitest`, and `next build` instead.

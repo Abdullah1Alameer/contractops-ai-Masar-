@@ -10,6 +10,7 @@ import { Card, CardBody } from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import {
+  apiErrorCode,
   cancelSignatureRequest,
   activateSignatureRequest,
   createSignatureRequest,
@@ -23,6 +24,9 @@ import { useI18n, type TKey } from "@/lib/i18n";
 import type { SignatureBundleResponse, SignatureRequestRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+const FIELD_CLASS =
+  "w-full rounded-lg border border-gray-300 bg-white p-2 text-sm text-gray-900 placeholder:text-gray-400 focus-visible:focus-ring disabled:bg-muted-50 disabled:text-gray-400";
+
 function statusKey(s: string): TKey {
   return `signature.status.${s}` as TKey;
 }
@@ -31,10 +35,12 @@ export default function SignaturePanel({
   contractId,
   contractStage,
   highlightId,
+  onLifecycleChange,
 }: {
   contractId: string;
   contractStage?: string;
   highlightId?: string | null;
+  onLifecycleChange?: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const { confirm } = useConfirm();
@@ -42,12 +48,13 @@ export default function SignaturePanel({
   const [loading, setLoading] = useState(true);
   const [bundle, setBundle] = useState<SignatureBundleResponse | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
   const [lastLink, setLastLink] = useState<string | null>(null);
   const [activated, setActivated] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [activationReason, setActivationReason] = useState("");
   const [activationEvidence, setActivationEvidence] = useState("");
+  const busy = pending !== null;
 
   const load = useCallback(() => {
     setLoading(true);
@@ -58,14 +65,21 @@ export default function SignaturePanel({
   }, [contractId]);
 
   useEffect(load, [load]);
+  useEffect(() => setActivated(false), [contractId]);
 
   const req = bundle?.request;
   const canCreate =
     (bundle?.can_create ?? (contractStage === "approved" || contractStage === "ready_to_sign")) &&
     !req?.status?.match(/partially_signed|completed/);
+  // Executed artifacts follow the request, not the stage, so they stay reachable from
+  // `signed` through `active` and every later stage. Only activation is stage-gated.
+  const completed = req?.status === "completed";
+  const showSignedDownload = completed && req?.signed_file_url !== null;
+  const showCertificateDownload = completed && req?.certificate_file_url !== null;
+  const showActivation = completed && contractStage === "signed" && !activated;
 
   const create = async (body: Parameters<typeof createSignatureRequest>[1]) => {
-    setBusy(true);
+    setPending("create");
     try {
       const out = await createSignatureRequest(contractId, body);
       const link = (out as { signer_links?: { signer_link: string }[] }).signer_links?.[0]?.signer_link;
@@ -73,10 +87,10 @@ export default function SignaturePanel({
       setDialogOpen(false);
       load();
       toast.success(t("signature.create"));
-    } catch {
-      toast.error(t("common.error"));
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -87,18 +101,81 @@ export default function SignaturePanel({
       body: t("signature.title"),
       confirmLabel: t("signature.send"),
       onConfirm: async () => {
-        setBusy(true);
+        setPending("send");
         try {
           await sendSignatureRequest(req.id);
           load();
-        } catch {
-          toast.error(t("common.error"));
+          toast.success(t("signature.sent"));
+          await onLifecycleChange?.();
+        } catch (error) {
+          toast.error(apiErrorCode(error, t("common.error")));
           throw new Error("send failed");
         } finally {
-          setBusy(false);
+          setPending(null);
         }
       },
     });
+  };
+
+  const cancel = async () => {
+    if (!req) return;
+    if (!cancelReason.trim()) {
+      toast.error(t("signature.cancelReasonRequired"));
+      return;
+    }
+    setPending("cancel");
+    try {
+      await cancelSignatureRequest(req.id, cancelReason.trim());
+      setCancelReason("");
+      load();
+      toast.success(t("signature.cancelled"));
+      await onLifecycleChange?.();
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const activate = async () => {
+    if (!req) return;
+    if (!activationReason.trim()) {
+      toast.error(t("signature.activationReasonRequired"));
+      return;
+    }
+    if (!activationEvidence.trim()) {
+      toast.error(t("signature.activationEvidenceRequired"));
+      return;
+    }
+    setPending("activate");
+    try {
+      await activateSignatureRequest(req.id, activationReason.trim(), activationEvidence.trim());
+      setActivationReason("");
+      setActivationEvidence("");
+      setActivated(true);
+      load();
+      toast.success(t("signature.activated"));
+      await onLifecycleChange?.();
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const download = async (kind: "signed" | "certificate") => {
+    if (!req) return;
+    setPending(`download-${kind}`);
+    try {
+      const blob = kind === "signed"
+        ? await downloadSignedPdf(req.id)
+        : await downloadSignatureCertificate(req.id);
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("signature.downloadFailed")));
+    } finally {
+      setPending(null);
+    }
   };
 
   if (loading) return <SkeletonCard rows={3} />;
@@ -108,89 +185,36 @@ export default function SignaturePanel({
     <div className={cn("space-y-4", highlightId && req?.id === highlightId && "rounded-card ring-2 ring-brand-500/40 p-2")}>
       <div className="flex flex-wrap gap-2">
         {canCreate && (
-          <Button variant="primary" size="sm" onClick={() => setDialogOpen(true)}>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => setDialogOpen(true)}>
             {t("signature.create")}
           </Button>
         )}
         {req && ["draft", "created"].includes(req.status) && (
-          <Button variant="primary" size="sm" loading={busy} onClick={send}>
+          <Button variant="primary" size="sm" loading={pending === "send"} disabled={busy} onClick={send}>
             {t("signature.send")}
           </Button>
         )}
-        {req && !["completed", "declined", "cancelled", "expired"].includes(req.status) && (
-          <div className="flex gap-2">
-            <input aria-label={t("signature.cancelReason")} placeholder={t("signature.cancelReason")} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
+        {showSignedDownload && (
           <Button
             variant="secondary"
             size="sm"
-            onClick={async () => {
-              if (!req) return;
-              if (!cancelReason.trim()) { toast.error(t("signature.cancelReason")); return; }
-              setBusy(true);
-              try {
-                await cancelSignatureRequest(req.id, cancelReason.trim());
-                load();
-              } catch {
-                toast.error(t("common.error"));
-              } finally {
-                setBusy(false);
-              }
-            }}
+            loading={pending === "download-signed"}
+            disabled={busy}
+            onClick={() => download("signed")}
           >
-            {t("signature.cancel")}
+            {t("signature.downloadSigned")}
           </Button>
-          </div>
         )}
-        {req?.status === "completed" && contractStage === "signed" && (
-          <>
-            {!activated && (
-              <div className="flex gap-2">
-              <input aria-label={t("signature.activationReason")} placeholder={t("signature.activationReason")} value={activationReason} onChange={(e) => setActivationReason(e.target.value)} />
-              <input aria-label={t("signature.activationEvidence")} placeholder={t("signature.activationEvidence")} value={activationEvidence} onChange={(e) => setActivationEvidence(e.target.value)} />
-              <Button
-              variant="primary"
-              size="sm"
-              onClick={async () => {
-                if (!activationReason.trim() || !activationEvidence.trim()) { toast.error(t("signature.activationReason")); return; }
-                setBusy(true);
-                try {
-                  await activateSignatureRequest(req.id, activationReason.trim(), activationEvidence.trim());
-                  setActivated(true);
-                  load();
-                } catch {
-                  toast.error(t("common.error"));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {t("signature.activate")}
-            </Button>
-              </div>
-            )}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={async () => {
-                const blob = await downloadSignedPdf(req.id);
-                const url = URL.createObjectURL(blob);
-                window.open(url, "_blank");
-              }}
-            >
-              {t("signature.downloadSigned")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={async () => {
-                const blob = await downloadSignatureCertificate(req.id);
-                const url = URL.createObjectURL(blob);
-                window.open(url, "_blank");
-              }}
-            >
-              {t("signature.downloadCert")}
-            </Button>
-          </>
+        {showCertificateDownload && (
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={pending === "download-certificate"}
+            disabled={busy}
+            onClick={() => download("certificate")}
+          >
+            {t("signature.downloadCert")}
+          </Button>
         )}
         {lastLink && (
           <Button
@@ -206,6 +230,64 @@ export default function SignaturePanel({
         )}
       </div>
 
+      {req && !["completed", "declined", "cancelled", "expired"].includes(req.status) && (
+        <Card>
+          <CardBody className="space-y-3">
+            <h4 className="font-semibold">{t("signature.cancelTitle")}</h4>
+            <input
+              className={FIELD_CLASS}
+              aria-label={t("signature.cancelReason")}
+              placeholder={t("signature.cancelReason")}
+              value={cancelReason}
+              disabled={busy}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={pending === "cancel"}
+              disabled={busy}
+              onClick={cancel}
+            >
+              {t("signature.cancel")}
+            </Button>
+          </CardBody>
+        </Card>
+      )}
+
+      {showActivation && (
+        <Card>
+          <CardBody className="space-y-3">
+            <h4 className="font-semibold">{t("signature.activationTitle")}</h4>
+            <input
+              className={FIELD_CLASS}
+              aria-label={t("signature.activationReason")}
+              placeholder={t("signature.activationReason")}
+              value={activationReason}
+              disabled={busy}
+              onChange={(e) => setActivationReason(e.target.value)}
+            />
+            <input
+              className={FIELD_CLASS}
+              aria-label={t("signature.activationEvidence")}
+              placeholder={t("signature.activationEvidence")}
+              value={activationEvidence}
+              disabled={busy}
+              onChange={(e) => setActivationEvidence(e.target.value)}
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              loading={pending === "activate"}
+              disabled={busy}
+              onClick={activate}
+            >
+              {t("signature.activate")}
+            </Button>
+          </CardBody>
+        </Card>
+      )}
+
       {req && (
         <>
           {req.is_stale && (
@@ -214,11 +296,19 @@ export default function SignaturePanel({
           <RequestView
             req={req}
             t={t}
+            busy={busy}
             onResend={async (signerId) => {
-              const r = await resendSignatureSigner(req.id, signerId);
-              setLastLink(r.signer_link);
-              toast.success(t("signature.resend"));
-              load();
+              setPending(`resend-${signerId}`);
+              try {
+                const r = await resendSignatureSigner(req.id, signerId);
+                setLastLink(r.signer_link);
+                toast.success(t("signature.resend"));
+                load();
+              } catch (error) {
+                toast.error(apiErrorCode(error, t("common.error")));
+              } finally {
+                setPending(null);
+              }
             }}
           />
         </>
@@ -247,10 +337,12 @@ export default function SignaturePanel({
 function RequestView({
   req,
   t,
+  busy,
   onResend,
 }: {
   req: SignatureRequestRow;
   t: (k: TKey) => string;
+  busy: boolean;
   onResend: (signerId: string) => void;
 }) {
   return (
@@ -275,7 +367,7 @@ function RequestView({
                 {s.signer_order}. {s.name} — {t(`signature.role.${s.role}` as TKey)} — {s.status}
               </span>
               {s.status !== "signed" && (
-                <Button variant="secondary" size="sm" onClick={() => onResend(s.id)}>
+                <Button variant="secondary" size="sm" disabled={busy} onClick={() => onResend(s.id)}>
                   {t("signature.resend")}
                 </Button>
               )}

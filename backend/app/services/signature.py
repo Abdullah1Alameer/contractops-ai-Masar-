@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import re
 import secrets
 import uuid
@@ -9,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from ..config import REVIEW_BASE_URL
+from ..config import REVIEW_BASE_URL, get_email_delivery_settings
 from ..models import ApprovalWorkflow, Contract, ContractVersion, OutboundMessage, SignatureEvent, SignatureRequest, SignatureSigner
 from .approvals import log_activity
 from .lifecycle import (
@@ -744,6 +746,34 @@ def decline_signature(raw_token: str, db: Session, *, reason: str, ip: str | Non
     return build_public_payload(raw_token, db)
 
 
+def _attestation_fingerprint(value: str) -> str | None:
+    """Keyed, truncated digest of operator free text.
+
+    Free-text reasons are short enough to be recovered from a plain digest, so a
+    fingerprint is only emitted when the deployment secret is configured.
+    """
+    secret = get_email_delivery_settings().portal_token_secret
+    if not secret:
+        return None
+    digest = hmac.new(secret.encode("utf-8"), value.encode("utf-8"), hashlib.sha256)
+    return digest.hexdigest()[:16]
+
+
+def _activation_attestation(reason: str, evidence: str) -> dict:
+    """Activation audit metadata that records attestation without the raw text."""
+    metadata: dict = {
+        "activation_ready": True,
+        "reason_present": True,
+        "evidence_present": True,
+    }
+    reason_fingerprint = _attestation_fingerprint(reason.strip())
+    evidence_fingerprint = _attestation_fingerprint(evidence.strip())
+    if reason_fingerprint and evidence_fingerprint:
+        metadata["reason_fingerprint"] = reason_fingerprint
+        metadata["evidence_fingerprint"] = evidence_fingerprint
+    return metadata
+
+
 def activate_contract(request_id, db: Session, *, actor: str, reason: str | None, evidence: str | None) -> dict:
     if actor not in ACTIVATION_ROLES:
         _raise(403, "signature_activation_forbidden")
@@ -758,7 +788,7 @@ def activate_contract(request_id, db: Session, *, actor: str, reason: str | None
         if req.status != "completed" or version.status != "signed":
             _raise(409, "activation_not_ready")
         _transition(db, contract, req, version, LifecycleEvent.CONTRACT_ACTIVATED, actor=actor,
-                    metadata={"activation_ready": True, "reason": reason.strip(), "evidence": evidence.strip()})
+                    metadata=_activation_attestation(reason, evidence))
         _commit(db, contract)
     except Exception:
         db.rollback()

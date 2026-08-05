@@ -502,3 +502,99 @@ def test_manual_activation_requires_authorized_evidence_and_moves_signed_contrac
     assert db.get(Contract, contract.id).stage == "active"
     event_names = [event.event_type for event in _events(db, contract.id)]
     assert event_names.count("contract_activated") == 1
+
+
+def _completed_request(db, contract, version, *, status="completed"):
+    request = SignatureRequest(
+        id=uuid4(), contract_id=contract.id, version_id=version.id, provider="simulated",
+        status=status, subject="Executed", expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    db.add(request)
+    db.commit()
+    return request
+
+
+def test_activation_never_persists_raw_reason_or_evidence(signature_db):
+    db, create_contract = signature_db
+    contract, version = create_contract(stage="signed", version_status="signed")
+    request = _completed_request(db, contract, version)
+    client = TestClient(app)
+    raw_reason = "Counterparty countersigned on 2026-04-01 per CFO Layla Al-Harbi"
+    raw_evidence = "Scanned wet-ink page stored at vault://legal/482-secret"
+
+    activated = client.post(
+        f"/api/signature-requests/{request.id}/activate",
+        headers=AUTH,
+        json={"reason": raw_reason, "evidence": raw_evidence},
+    )
+
+    assert activated.status_code == 200, activated.text
+    db.expire_all()
+    assert db.get(Contract, contract.id).stage == "active"
+    activities = _events(db, contract.id)
+    payloads = [str(row.event_metadata) for row in activities] + [
+        str(row.event_metadata)
+        for row in db.query(SignatureEvent).filter_by(signature_request_id=request.id).all()
+    ]
+    assert payloads, "activation must persist at least one auditable event"
+    for payload in payloads:
+        assert raw_reason not in payload
+        assert raw_evidence not in payload
+    activation = [row for row in activities if row.event_type == "contract_activated"]
+    assert len(activation) == 1
+    metadata = activation[0].event_metadata or {}
+    assert metadata.get("reason_present") is True
+    assert metadata.get("evidence_present") is True
+    assert "reason" not in metadata
+    assert "evidence" not in metadata
+
+
+def test_activation_on_incomplete_request_returns_activation_not_ready_without_mutation(signature_db):
+    db, create_contract = signature_db
+    contract, version = create_contract(stage="signed", version_status="signed")
+    request = _completed_request(db, contract, version, status="sent")
+    before = [event.event_type for event in _events(db, contract.id)]
+    client = TestClient(app)
+
+    response = client.post(
+        f"/api/signature-requests/{request.id}/activate",
+        headers=AUTH,
+        json={"reason": "Effective date verified.", "evidence": "Countersigned scan"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "activation_not_ready"
+    db.expire_all()
+    assert db.get(Contract, contract.id).stage == "signed"
+    assert db.get(SignatureRequest, request.id).status == "sent"
+    assert [event.event_type for event in _events(db, contract.id)] == before
+
+
+def test_activation_on_stale_request_returns_workflow_stale_without_mutation(signature_db):
+    db, create_contract = signature_db
+    contract, version = create_contract(stage="signed", version_status="signed")
+    request = _completed_request(db, contract, version)
+    version.is_current = False
+    db.add(
+        ContractVersion(
+            id=uuid4(), contract_id=contract.id, version_number=2, version_label="v2",
+            source="manual_upload", status="ready", file_path=contract.file_url,
+            is_current=True, created_by="synthetic-test",
+        )
+    )
+    db.commit()
+    before = [event.event_type for event in _events(db, contract.id)]
+    client = TestClient(app)
+
+    response = client.post(
+        f"/api/signature-requests/{request.id}/activate",
+        headers=AUTH,
+        json={"reason": "Effective date verified.", "evidence": "Countersigned scan"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "workflow_stale"
+    db.expire_all()
+    assert db.get(Contract, contract.id).stage == "signed"
+    assert db.get(SignatureRequest, request.id).status == "completed"
+    assert [event.event_type for event in _events(db, contract.id)] == before
