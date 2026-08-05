@@ -31,8 +31,18 @@ class CreateSignatureBody(BaseModel):
     signing_order_enabled: bool = True
     signers: list[SignerInput] = Field(min_length=1)
 
+class CancelSignatureBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ActivateSignatureBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=4000)
+
 
 def _map_err(e: ValueError) -> HTTPException:
+    if isinstance(e, sig_svc.SignatureError):
+        return HTTPException(e.status_code, detail=e.payload)
     code = str(e)
     if code in ("contract_not_approved", "active_request_exists", "invalid_transition", "request_closed"):
         return HTTPException(409, detail={"error": code})
@@ -83,11 +93,26 @@ def send_signature_request(
 @router.post("/signature-requests/{request_id}/cancel")
 def cancel_signature_request(
     request_id: uuid.UUID,
+    body: CancelSignatureBody,
     db: Session = Depends(get_db),
     role: str = Depends(demo_role),
 ):
     try:
-        return sig_svc.cancel_request(request_id, db, actor=role)
+        return sig_svc.cancel_request(request_id, db, actor=role, reason=body.reason)
+    except ValueError as e:
+        raise _map_err(e)
+
+@router.post("/signature-requests/{request_id}/activate")
+def activate_signature_request(
+    request_id: uuid.UUID,
+    body: ActivateSignatureBody,
+    db: Session = Depends(get_db),
+    role: str = Depends(demo_role),
+):
+    try:
+        return sig_svc.activate_contract(
+            request_id, db, actor=role, reason=body.reason, evidence=body.evidence
+        )
     except ValueError as e:
         raise _map_err(e)
 

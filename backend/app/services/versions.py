@@ -691,12 +691,13 @@ def mark_version_approved(contract_id, workflow_id, db: Session, *, commit: bool
         )
 
 
-def mark_version_signed(contract_id, signature_request_id, db: Session) -> None:
+def mark_version_signed(contract_id, signature_request_id, db: Session, *, commit: bool = True) -> None:
     v = current_version(contract_id, db)
     if v:
         v.status = "signed"
         v.signature_request_id = signature_request_id
-        db.commit()
+        if commit:
+            db.commit()
         log_version_activity(
             db,
             contract_id,

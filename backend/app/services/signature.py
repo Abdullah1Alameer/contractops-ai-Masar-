@@ -10,20 +10,21 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from ..config import REVIEW_BASE_URL
-from ..integrations.esign import get_provider
-from ..models import Contract, SignatureEvent, SignatureRequest, SignatureSigner
+from ..models import ApprovalWorkflow, Contract, ContractVersion, OutboundMessage, SignatureEvent, SignatureRequest, SignatureSigner
 from .approvals import log_activity
 from .lifecycle import (
-    DECLINE_REVERT_STAGE,
-    can_create_signature,
-    set_stage,
-    transition_stage,
+    LifecycleEvent,
+    LifecycleService,
 )
 from .outbound_messages import (
     TokenMaterial,
     create_token_material,
+    create_pending_attempt,
+    deliver_pending_attempt,
+    enforce_resend_cooldown,
     hash_public_token,
     public_token_from_nonce,
+    serialize_delivery,
 )
 from .signature_pdf import build_certificate_pdf, build_signed_pdf, original_bytes, sha256_hex
 from .storage import storage
@@ -42,6 +43,22 @@ ALLOWED_SIGNER_ROLES = frozenset(
 CONSENT_EN = "I agree to sign this document electronically."
 CONSENT_AR = "أوافق على توقيع هذا المستند إلكترونيًا"
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+SIGNATURE_INVITATION_MESSAGE_TYPE = "signature_invitation"
+ACTIVATION_ROLES = frozenset({"legal", "executive"})
+
+
+class SignatureError(ValueError):
+    """Stable service error contract for protected and public signature APIs."""
+
+    def __init__(self, status_code: int, code: str, **payload):
+        self.status_code = status_code
+        self.code = code
+        self.payload = {"error": code, **payload}
+        super().__init__(code)
+
+
+def _raise(status_code: int, code: str, **payload) -> None:
+    raise SignatureError(status_code, code, **payload)
 
 
 def _utcnow() -> datetime:
@@ -50,6 +67,90 @@ def _utcnow() -> datetime:
 
 def _iso(dt) -> str | None:
     return dt.isoformat() if dt else None
+
+
+def _commit(db: Session, *rows) -> None:
+    try:
+        db.commit()
+        for row in rows:
+            db.refresh(row)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _lock_contract(contract_id, db: Session) -> Contract:
+    contract = db.query(Contract).filter(Contract.id == contract_id).with_for_update().one_or_none()
+    if contract is None:
+        _raise(404, "not_found")
+    return contract
+
+
+def _lock_request(request_id, db: Session) -> SignatureRequest:
+    req = (
+        db.query(SignatureRequest)
+        .filter(SignatureRequest.id == request_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if req is None:
+        _raise(404, "not_found")
+    return req
+
+
+def _locked_current_version(contract_id, db: Session) -> ContractVersion | None:
+    return (
+        db.query(ContractVersion)
+        .filter_by(contract_id=contract_id, is_current=True)
+        .with_for_update()
+        .order_by(ContractVersion.version_number.desc())
+        .first()
+    )
+
+
+def _is_stale(req: SignatureRequest, version: ContractVersion | None) -> bool:
+    return version is None or req.version_id is None or req.version_id != version.id
+
+
+def _active_approved_workflow(contract_id, version_id, db: Session) -> bool:
+    return (
+        db.query(ApprovalWorkflow)
+        .filter_by(contract_id=contract_id, version_id=version_id, status="approved")
+        .first()
+        is not None
+    )
+
+
+def _transition(
+    db: Session,
+    contract: Contract,
+    req: SignatureRequest,
+    version: ContractVersion,
+    event: LifecycleEvent,
+    *,
+    actor: str,
+    metadata: dict | None = None,
+):
+    transition = LifecycleService.transition(
+        contract,
+        event,
+        actor,
+        metadata={
+            "request_id": str(req.id),
+            "version_id": str(version.id),
+            "current_version": True,
+            **(metadata or {}),
+        },
+    )
+    if transition.changed:
+        log_activity(
+            db,
+            contract.id,
+            transition.activity_event.value,
+            actor=actor,
+            metadata=transition.activity_metadata,
+        )
+    return transition
 
 
 def hash_token(raw: str) -> str:
@@ -124,15 +225,63 @@ def get_signer_by_token(raw_token: str, db: Session) -> SignatureSigner | None:
     return db.query(SignatureSigner).filter_by(token_hash=th).first()
 
 
+def _create_invitation_attempts(db, contract, req, signers, *, actor):
+    pending = []
+    for signer in signers:
+        link = signer_link(public_token_for_signer(signer))
+        email = build_invitation_email(contract, req, signer, link)
+        row = create_pending_attempt(
+            db,
+            message_type=SIGNATURE_INVITATION_MESSAGE_TYPE,
+            recipient=signer.email,
+            subject=email["subject_en"],
+            contract_id=contract.id,
+            signature_request_id=req.id,
+            signer_id=signer.id,
+        )
+        log_sig_event(db, req.id, "signer_invited", signer_id=signer.id, actor=actor,
+                      metadata={"order": signer.signer_order})
+        pending.append((row, signer))
+    return pending
+
+
+def _deliver_invitation(attempt_id, contract, req, signer, db):
+    email = build_invitation_email(contract, req, signer, signer_link(public_token_for_signer(signer)))
+    return deliver_pending_attempt(
+        attempt_id, db, recipient=signer.email, subject=email["subject_en"],
+        text_body=email["body_en"], html_body=email["html_en"],
+    )
+
+
+def _expire_locked(req, contract, version, db) -> bool:
+    expires_at = req.expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if req.status not in TERMINAL_REQUEST_STATUSES and expires_at and expires_at <= _utcnow():
+        req.status, req.updated_at = "expired", _utcnow()
+        _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_EXPIRED, actor="system")
+        log_activity(db, contract.id, "signature_request_expired", actor="system",
+                     metadata={"request_id": str(req.id)})
+        log_sig_event(db, req.id, "request_expired", actor="system")
+        _commit(db, req, contract)
+        return True
+    return False
+
+
 def expire_if_needed(req: SignatureRequest, db: Session) -> SignatureRequest:
     if req.status in TERMINAL_REQUEST_STATUSES:
         return req
-    if req.expires_at and req.expires_at <= _utcnow():
-        req.status = "expired"
-        req.updated_at = _utcnow()
-        db.commit()
-        db.refresh(req)
-    return req
+    try:
+        locked = _lock_request(req.id, db)
+        contract = _lock_contract(locked.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        if _is_stale(locked, version):
+            _raise(409, "workflow_stale")
+        _expire_locked(locked, contract, version, db)
+        return locked
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _validate_signers_body(signers: list[dict], *, allow_duplicate_emails: bool = False) -> None:
@@ -167,79 +316,62 @@ def create_request(
     actor: str = "demo",
     allow_duplicate_emails: bool = False,
 ) -> dict:
-    contract = db.get(Contract, contract_id)
-    if contract is None:
-        raise ValueError("not_found")
-    if not can_create_signature(contract):
-        raise ValueError("contract_not_approved")
-    if get_active_request(contract_id, db):
-        raise ValueError("active_request_exists")
+    saved_keys: list[str] = []
+    try:
+        contract = _lock_contract(contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        if version is None:
+            _raise(409, "current_version_required")
+        if contract.stage != "ready_to_sign":
+            _raise(409, "invalid_stage_transition")
+        if version.status != "approved":
+            _raise(409, "version_not_approved")
+        if not _active_approved_workflow(contract.id, version.id, db):
+            _raise(409, "approval_not_complete")
+        if get_active_request(contract_id, db):
+            _raise(409, "active_request_exists")
+    except Exception:
+        db.rollback()
+        raise
     if expires_at <= _utcnow():
-        raise ValueError("expires_must_be_future")
+        _raise(422, "expires_must_be_future")
     _validate_signers_body(signers, allow_duplicate_emails=allow_duplicate_emails)
-
-    orig = original_bytes(contract)
-    orig_hash = sha256_hex(orig)
-    orig_key = storage.save(orig, f"sig_orig_{contract_id}.pdf")
-
-    provider = get_provider()
-    from .versions import current_version
-
-    cur = current_version(contract_id, db)
-    req = SignatureRequest(
-        id=uuid.uuid4(),
-        contract_id=contract_id,
-        version_id=cur.id if cur else None,
-        provider=provider.name,
-        status="draft",
-        created_by=actor,
-        subject=subject.strip(),
-        message=message,
-        signing_order_enabled=signing_order_enabled,
-        expires_at=expires_at,
-        original_file_url=orig_key,
-        original_hash=orig_hash,
-    )
-    db.add(req)
-    db.flush()
-
-    provider.create_request(contract_id=str(contract_id), metadata={"request_id": str(req.id)})
-
-    signer_rows: list[SignatureSigner] = []
-    tokens_out: list[dict] = []
-    for s in sorted(signers, key=lambda x: x["order"]):
-        material = generate_token_material()
-        row = SignatureSigner(
-            id=uuid.uuid4(),
-            signature_request_id=req.id,
-            signer_order=int(s["order"]),
-            name=s["name"].strip(),
-            email=s["email"].strip(),
-            role=s.get("role", "other"),
-            token_hash=material.token_hash,
-            token_nonce=material.nonce,
-            status="waiting",
+    try:
+        orig = original_bytes(contract)
+        orig_hash = sha256_hex(orig)
+        orig_key = storage.save(orig, f"sig_orig_{contract_id}.pdf")
+        saved_keys.append(orig_key)
+        req = SignatureRequest(
+            id=uuid.uuid4(), contract_id=contract_id, version_id=version.id,
+            provider="simulated", status="draft", created_by=actor, subject=subject.strip(),
+            message=message, signing_order_enabled=signing_order_enabled, expires_at=expires_at,
+            original_file_url=orig_key, original_hash=orig_hash,
         )
-        db.add(row)
-        signer_rows.append(row)
-        tokens_out.append(
-            {
-                "signer_id": str(row.id),
-                "order": row.signer_order,
-                "name": row.name,
-                "email": row.email,
-                "signer_link": signer_link(material.public_token),
-                "token": material.public_token,
-            }
-        )
-
-    transition_stage(contract, "awaiting_signature", db)
-    log_activity(db, contract_id, "signature_request_created", actor=actor, metadata={"request_id": str(req.id)})
-    if cur:
-        log_activity(db, contract_id, "version_sent_for_signature", actor=actor, metadata={"version_number": cur.version_number})
-    log_sig_event(db, req.id, "request_created", actor=actor, metadata={"provider": provider.name})
-    db.commit()
-    db.refresh(req)
+        db.add(req)
+        db.flush()
+        signer_rows, tokens_out = [], []
+        for s in sorted(signers, key=lambda x: x["order"]):
+            material = generate_token_material()
+            row = SignatureSigner(
+                id=uuid.uuid4(), signature_request_id=req.id, signer_order=int(s["order"]),
+                name=s["name"].strip(), email=s["email"].strip(), role=s.get("role", "other"),
+                token_hash=material.token_hash, token_nonce=material.nonce, status="waiting",
+            )
+            db.add(row)
+            signer_rows.append(row)
+            tokens_out.append({"signer_id": str(row.id), "order": row.signer_order, "name": row.name,
+                               "email": row.email, "signer_link": signer_link(material.public_token),
+                               "token": material.public_token})
+        transition = _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_REQUEST_CREATED, actor=actor)
+        log_activity(db, contract_id, "signature_request_created", actor=actor,
+                     metadata={"request_id": str(req.id), "version_id": str(version.id)})
+        log_sig_event(db, req.id, "request_created", actor=actor, metadata={"provider": req.provider})
+        _commit(db, req)
+    except Exception:
+        db.rollback()
+        for key in saved_keys:
+            storage.delete(key)
+        raise
 
     emails = [build_invitation_email(contract, req, sr, t["signer_link"]) for sr, t in zip(signer_rows, tokens_out)]
     return {
@@ -251,80 +383,86 @@ def create_request(
 
 
 def send_request(request_id, db: Session, *, actor: str = "demo") -> dict:
-    req = get_request_by_id(request_id, db)
-    if req is None:
-        raise ValueError("not_found")
-    expire_if_needed(req, db)
-    if req.status in TERMINAL_REQUEST_STATUSES:
-        raise ValueError("request_closed")
-    if req.status not in ("draft", "created"):
-        raise ValueError("invalid_transition")
-
-    signers = _signers_for(req.id, db)
-    now = _utcnow()
-    req.status = "sent"
-    req.sent_at = now
-    req.updated_at = now
-
-    if req.signing_order_enabled:
-        signers[0].status = "invited"
-        for s in signers[1:]:
-            s.status = "waiting"
-    else:
-        for s in signers:
-            s.status = "invited"
-
-    provider = get_provider()
-    provider.send_request(external_id=req.external_id, metadata={"request_id": str(req.id)})
-
-    log_activity(db, req.contract_id, "signature_request_sent", actor=actor, metadata={"request_id": str(req.id)})
-    log_sig_event(db, req.id, "request_sent", actor=actor)
-    for s in signers:
-        if s.status == "invited":
-            log_sig_event(db, req.id, "signer_invited", signer_id=s.id, actor=actor, metadata={"order": s.signer_order})
-    db.commit()
-    db.refresh(req)
-    return serialize_request_bundle(req, db)
+    try:
+        req = _lock_request(request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        _expire_locked(req, contract, version, db)
+        if req.status in TERMINAL_REQUEST_STATUSES:
+            _raise(409, "request_closed")
+        if req.status not in ("draft", "created"):
+            _raise(409, "invalid_transition")
+        signers = _signers_for(req.id, db)
+        invitees = signers[:1] if req.signing_order_enabled else signers
+        now = _utcnow()
+        req.status, req.sent_at, req.updated_at = "sent", now, now
+        for signer in invitees:
+            signer.status = "invited"
+        _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_SENT, actor=actor)
+        log_activity(db, req.contract_id, "signature_request_sent", actor=actor, metadata={"request_id": str(req.id)})
+        log_sig_event(db, req.id, "request_sent", actor=actor)
+        pending = _create_invitation_attempts(db, contract, req, invitees, actor=actor)
+        _commit(db, req)
+    except Exception:
+        db.rollback()
+        raise
+    deliveries = [_deliver_invitation(row.id, contract, req, signer, db) for row, signer in pending]
+    return {**serialize_request_bundle(req, db), "deliveries": [serialize_delivery(row) for row in deliveries]}
 
 
-def cancel_request(request_id, db: Session, *, actor: str = "demo") -> dict:
-    req = get_request_by_id(request_id, db)
-    if req is None:
-        raise ValueError("not_found")
-    if req.status in TERMINAL_REQUEST_STATUSES:
-        raise ValueError("request_closed")
-    contract = db.get(Contract, req.contract_id)
-    req.status = "cancelled"
-    req.updated_at = _utcnow()
-    if contract:
-        set_stage(contract, "approved", db)
-    log_activity(db, req.contract_id, "signature_request_cancelled", actor=actor)
-    log_sig_event(db, req.id, "request_cancelled", actor=actor)
-    db.commit()
-    db.refresh(req)
+def cancel_request(request_id, db: Session, *, actor: str = "demo", reason: str | None = None) -> dict:
+    if not (reason or "").strip():
+        _raise(422, "signature_reason_required")
+    try:
+        req = _lock_request(request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if req.status in TERMINAL_REQUEST_STATUSES:
+            _raise(409, "request_closed")
+        req.status, req.updated_at = "cancelled", _utcnow()
+        _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_CANCELLED, actor=actor)
+        log_activity(db, req.contract_id, "signature_request_cancelled", actor=actor,
+                     metadata={"request_id": str(req.id), "reason_present": True})
+        log_sig_event(db, req.id, "request_cancelled", actor=actor, metadata={"reason_present": True})
+        _commit(db, req, contract)
+    except Exception:
+        db.rollback()
+        raise
     return serialize_request_bundle(req, db)
 
 
 def resend_signer(request_id, signer_id, db: Session, *, actor: str = "demo") -> dict:
-    req = get_request_by_id(request_id, db)
-    if req is None:
-        raise ValueError("not_found")
-    signer = db.get(SignatureSigner, signer_id)
-    if signer is None or signer.signature_request_id != req.id:
-        raise ValueError("not_found")
-    if signer.token_nonce:
+    try:
+        req = _lock_request(request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        signer = (
+            db.query(SignatureSigner).filter_by(id=signer_id).with_for_update().one_or_none()
+        )
+        if signer is None or signer.signature_request_id != req.id:
+            _raise(404, "not_found")
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if req.status in TERMINAL_REQUEST_STATUSES or signer.status not in ("invited", "opened"):
+            _raise(409, "not_active_signer")
+        enforce_resend_cooldown(
+            db, contract_id=contract.id, message_type=SIGNATURE_INVITATION_MESSAGE_TYPE,
+            signature_request_id=req.id, signer_id=signer.id,
+        )
         raw = public_token_for_signer(signer)
-    else:
-        material = generate_token_material()
-        signer.token_nonce = material.nonce
-        signer.token_hash = material.token_hash
-        raw = material.public_token
-    link = signer_link(raw)
-    contract = db.get(Contract, req.contract_id)
-    email = build_invitation_email(contract, req, signer, link) if contract else {}
-    log_sig_event(db, req.id, "signer_resent", signer_id=signer.id, actor=actor)
-    db.commit()
-    return {"signer_link": link, "token": raw, "email": email}
+        email = build_invitation_email(contract, req, signer, signer_link(raw))
+        pending = _create_invitation_attempts(db, contract, req, [signer], actor=actor)
+        log_sig_event(db, req.id, "signer_resent", signer_id=signer.id, actor=actor)
+        _commit(db, req)
+    except Exception:
+        db.rollback()
+        raise
+    delivery = _deliver_invitation(pending[0][0].id, contract, req, signer, db)
+    return {"signer_link": signer_link(raw), "token": raw, "email": email, "delivery": serialize_delivery(delivery)}
 
 
 def _signer_can_act(signer: SignatureSigner, req: SignatureRequest, signers: list[SignatureSigner]) -> bool:
@@ -453,78 +591,72 @@ def submit_signature(
         raise ValueError("invalid_signature_type")
     if not consent_accepted:
         raise ValueError("consent_required")
-    signer = get_signer_by_token(raw_token, db)
-    if signer is None:
-        raise ValueError("not_found")
-    req = get_request_by_id(signer.signature_request_id, db)
-    if req is None:
-        raise ValueError("not_found")
-    expire_if_needed(req, db)
-    if req.status == "expired":
-        raise ValueError("expired")
-    if req.status in TERMINAL_REQUEST_STATUSES:
-        raise ValueError("request_closed")
-    signers = _signers_for(req.id, db)
-    if signer.status == "signed":
-        return build_public_payload(raw_token, db)
-    if _waiting_for_prior(signer, signers, req.signing_order_enabled):
-        raise ValueError("not_active_signer")
-    if not _signer_can_act(signer, req, signers):
-        raise ValueError("not_active_signer")
-    if signer.name.strip().lower() != signer_name_confirmation.strip().lower():
-        raise ValueError("name_mismatch")
-
-    data = _decode_signature_value(signature_type, signature_value)
-    if signature_type in ("drawn", "uploaded") and len(data) > MAX_UPLOAD_BYTES:
-        raise ValueError("file_too_large")
-    ext = "png" if signature_type == "drawn" else "txt"
-    if signature_type == "uploaded" and data[:2] == b"\xff\xd8":
-        ext = "jpg"
-    key = storage.save(data, f"sig_{signer.id}.{ext}")
-
-    now = _utcnow()
-    signer.status = "signed"
-    signer.signed_at = now
-    signer.signature_type = signature_type
-    signer.signature_value_url = key
-    signer.consent_text = CONSENT_EN
-    signer.ip_address = ip
-    signer.user_agent = (user_agent or "")[:500] or None
-
-    contract = db.get(Contract, req.contract_id)
-    log_activity(db, req.contract_id, "signer_signed", actor=signer.email, metadata={"order": signer.signer_order})
-    log_sig_event(
-        db,
-        req.id,
-        "signer_signed",
-        signer_id=signer.id,
-        actor=signer.email,
-        metadata={"signature_type": signature_type, "provider": req.provider},
-    )
-
-    signed_count = sum(1 for s in signers if s.status == "signed")
-    if signed_count < len(signers):
-        req.status = "partially_signed"
-        if contract:
-            transition_stage(contract, "partially_signed", db)
-        for s in signers:
-            if s.status == "waiting" and req.signing_order_enabled:
-                prior_done = all(x.status == "signed" for x in signers if x.signer_order < s.signer_order)
-                if prior_done:
-                    s.status = "invited"
-                    log_sig_event(db, req.id, "signer_invited", signer_id=s.id, actor="system")
-        db.commit()
-        return build_public_payload(raw_token, db)
-
-    _finalize_request(req, contract, signers, db, actor=signer.email)
-    db.commit()
+    saved_keys: list[str] = []
+    try:
+        unlocked_signer = get_signer_by_token(raw_token, db)
+        if unlocked_signer is None:
+            _raise(404, "not_found")
+        req = _lock_request(unlocked_signer.signature_request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        signer = db.query(SignatureSigner).filter_by(id=unlocked_signer.id).with_for_update().one()
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if _expire_locked(req, contract, version, db):
+            _raise(410, "expired")
+        if req.status in TERMINAL_REQUEST_STATUSES:
+            _raise(409, "request_closed")
+        signers = _signers_for(req.id, db)
+        if signer.status == "signed":
+            _raise(409, "signer_closed")
+        if not _signer_can_act(signer, req, signers):
+            _raise(409, "not_active_signer")
+        if signer.name.strip().lower() != signer_name_confirmation.strip().lower():
+            _raise(422, "name_mismatch")
+        data = _decode_signature_value(signature_type, signature_value)
+        if signature_type in ("drawn", "uploaded") and len(data) > MAX_UPLOAD_BYTES:
+            _raise(422, "file_too_large")
+        ext = "png" if signature_type == "drawn" else "txt"
+        key = storage.save(data, f"sig_{signer.id}.{ext}")
+        saved_keys.append(key)
+        now = _utcnow()
+        signer.status, signer.signed_at, signer.signature_type = "signed", now, signature_type
+        signer.signature_value_url, signer.consent_text = key, CONSENT_EN
+        signer.ip_address, signer.user_agent = ip, (user_agent or "")[:500] or None
+        log_activity(db, req.contract_id, "signer_signed", actor=signer.email,
+                     metadata={"order": signer.signer_order, "request_id": str(req.id)})
+        log_sig_event(db, req.id, "signer_signed", signer_id=signer.id, actor=signer.email,
+                      metadata={"signature_type": signature_type, "provider": req.provider})
+        signed_count = sum(1 for s in signers if s.status == "signed")
+        pending = []
+        if signed_count < len(signers):
+            req.status, req.updated_at = "partially_signed", now
+            _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_PARTIALLY_SIGNED, actor=signer.email)
+            invitees = [
+                s for s in signers if s.status == "waiting"
+                and (not req.signing_order_enabled or all(x.status == "signed" for x in signers if x.signer_order < s.signer_order))
+            ]
+            for invitee in invitees:
+                invitee.status = "invited"
+            pending = _create_invitation_attempts(db, contract, req, invitees, actor="system")
+        else:
+            _finalize_request(req, contract, version, signers, db, actor=signer.email, saved_keys=saved_keys)
+        _commit(db, req, contract)
+    except Exception:
+        db.rollback()
+        for key in saved_keys:
+            storage.delete(key)
+        raise
+    for attempt, invitee in pending:
+        _deliver_invitation(attempt.id, contract, req, invitee, db)
     return build_public_payload(raw_token, db)
 
 
-def _finalize_request(req: SignatureRequest, contract: Contract | None, signers: list[SignatureSigner], db: Session, *, actor: str):
+def _finalize_request(req: SignatureRequest, contract: Contract, version: ContractVersion, signers: list[SignatureSigner], db: Session, *, actor: str, saved_keys: list[str]):
     signed_pdf = build_signed_pdf(contract, req, signers)
     req.signed_hash = sha256_hex(signed_pdf)
     signed_key = storage.save(signed_pdf, f"signed_{req.id}.pdf")
+    saved_keys.append(signed_key)
     req.signed_file_url = signed_key
 
     events = db.query(SignatureEvent).filter_by(signature_request_id=req.id).all()
@@ -537,15 +669,13 @@ def _finalize_request(req: SignatureRequest, contract: Contract | None, signers:
         signed_hash=req.signed_hash or "",
     )
     cert_key = storage.save(cert, f"cert_{req.id}.pdf")
+    saved_keys.append(cert_key)
     req.certificate_file_url = cert_key
 
     now = _utcnow()
     req.status = "completed"
     req.completed_at = now
     req.updated_at = now
-
-    provider = get_provider()
-    provider.sign(metadata={"request_id": str(req.id), "signed_bytes": signed_pdf, "certificate_bytes": cert})
 
     log_activity(db, req.contract_id, "signature_request_completed", actor=actor)
     log_activity(db, req.contract_id, "signed_document_generated", actor=actor)
@@ -554,48 +684,70 @@ def _finalize_request(req: SignatureRequest, contract: Contract | None, signers:
     log_sig_event(db, req.id, "signed_document_generated", actor=actor)
     log_sig_event(db, req.id, "certificate_generated", actor=actor)
 
-    if contract:
-        transition_stage(contract, "signed", db)
-        transition_stage(contract, "active", db)
-        log_activity(db, req.contract_id, "contract_activated", actor=actor)
-        from .versions import mark_version_signed
-
-        mark_version_signed(req.contract_id, req.id, db)
-        log_activity(db, req.contract_id, "version_signed", actor=actor)
+    _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_COMPLETED, actor=actor,
+                metadata={"signature_complete": True})
+    from .versions import mark_version_signed
+    mark_version_signed(req.contract_id, req.id, db, commit=False)
+    log_activity(db, req.contract_id, "version_signed", actor=actor)
 
 
 def decline_signature(raw_token: str, db: Session, *, reason: str, ip: str | None, user_agent: str | None) -> dict:
     if not (reason or "").strip():
-        raise ValueError("reason_required")
-    signer = get_signer_by_token(raw_token, db)
-    if signer is None:
-        raise ValueError("not_found")
-    req = get_request_by_id(signer.signature_request_id, db)
-    if req is None:
-        raise ValueError("not_found")
-    if req.status in TERMINAL_REQUEST_STATUSES:
-        raise ValueError("request_closed")
-    signers = _signers_for(req.id, db)
-    if _waiting_for_prior(signer, signers, req.signing_order_enabled):
-        raise ValueError("not_active_signer")
-
-    now = _utcnow()
-    signer.status = "declined"
-    signer.declined_at = now
-    signer.decline_reason = reason.strip()
-    signer.ip_address = ip
-    signer.user_agent = (user_agent or "")[:500] or None
-    req.status = "declined"
-    req.declined_at = now
-    req.decline_reason = reason.strip()
-
-    contract = db.get(Contract, req.contract_id)
-    if contract:
-        set_stage(contract, DECLINE_REVERT_STAGE, db)
-    log_activity(db, req.contract_id, "signer_declined", actor=signer.email, comment=reason.strip())
-    log_sig_event(db, req.id, "signer_declined", signer_id=signer.id, actor=signer.email, metadata={"reason": reason.strip()})
-    db.commit()
+        _raise(422, "reason_required")
+    try:
+        unlocked_signer = get_signer_by_token(raw_token, db)
+        if unlocked_signer is None:
+            _raise(404, "not_found")
+        req = _lock_request(unlocked_signer.signature_request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        signer = db.query(SignatureSigner).filter_by(id=unlocked_signer.id).with_for_update().one()
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if req.status in TERMINAL_REQUEST_STATUSES:
+            _raise(409, "request_closed")
+        signers = _signers_for(req.id, db)
+        if not _signer_can_act(signer, req, signers):
+            _raise(409, "not_active_signer")
+        now = _utcnow()
+        signer.status, signer.declined_at, signer.decline_reason = "declined", now, reason.strip()
+        signer.ip_address, signer.user_agent = ip, (user_agent or "")[:500] or None
+        req.status, req.declined_at, req.decline_reason = "declined", now, reason.strip()
+        _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_DECLINED, actor=signer.email,
+                    metadata={"reason": reason.strip()})
+        log_activity(db, req.contract_id, "signer_declined", actor=signer.email,
+                     metadata={"request_id": str(req.id), "reason_present": True})
+        log_sig_event(db, req.id, "signer_declined", signer_id=signer.id, actor=signer.email,
+                      metadata={"reason_present": True})
+        _commit(db, req, contract)
+    except Exception:
+        db.rollback()
+        raise
     return build_public_payload(raw_token, db)
+
+
+def activate_contract(request_id, db: Session, *, actor: str, reason: str | None, evidence: str | None) -> dict:
+    if actor not in ACTIVATION_ROLES:
+        _raise(403, "signature_activation_forbidden")
+    if not (reason or "").strip() or not (evidence or "").strip():
+        _raise(422, "activation_reason_evidence_required")
+    try:
+        req = _lock_request(request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if req.status != "completed" or version.status != "signed":
+            _raise(409, "activation_not_ready")
+        _transition(db, contract, req, version, LifecycleEvent.CONTRACT_ACTIVATED, actor=actor,
+                    metadata={"activation_ready": True, "reason": reason.strip(), "evidence": evidence.strip()})
+        log_activity(db, contract.id, "contract_activated", actor=actor,
+                     metadata={"request_id": str(req.id), "reason_present": True, "evidence_present": True})
+        _commit(db, contract)
+    except Exception:
+        db.rollback()
+        raise
+    return serialize_request_bundle(req, db)
 
 
 def get_document_bytes(raw_token: str, db: Session) -> bytes:

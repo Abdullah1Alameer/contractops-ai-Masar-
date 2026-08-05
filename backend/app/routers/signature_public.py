@@ -31,6 +31,8 @@ def _rate(request: Request, token: str) -> None:
 
 
 def _public_err(e: ValueError) -> HTTPException:
+    if isinstance(e, sig_svc.SignatureError):
+        return HTTPException(e.status_code, detail=e.payload)
     code = str(e)
     if code == "expired":
         return HTTPException(410, detail={"error": code})
