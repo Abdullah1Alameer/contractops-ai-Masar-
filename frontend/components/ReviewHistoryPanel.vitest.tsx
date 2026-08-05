@@ -22,6 +22,7 @@ const resendContractReview = vi.fn();
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
+const toastInfo = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   apiErrorCode: (error: unknown, fallback: string) =>
@@ -37,7 +38,7 @@ vi.mock("@/components/feedback/ToastProvider", () => ({
     success: toastSuccess,
     error: toastError,
     warning: vi.fn(),
-    info: vi.fn(),
+    info: (...args: unknown[]) => toastInfo(...args),
     toast: vi.fn(),
   }),
 }));
@@ -188,5 +189,33 @@ describe("ReviewHistoryPanel persisted delivery", () => {
     fireEvent.click(await screen.findByText("إعادة إرسال البريد"));
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("email_resend_cooldown"));
+  });
+
+  it("never claims a real resend when the retry delivery is still pending/sending/cancelled", async () => {
+    fetchContractReviews.mockResolvedValue([row()]);
+    resendContractReview.mockResolvedValue({
+      review_link: "https://demo.local/review/abc123token",
+      email: { subject: "Please review", body: "body", review_link: "https://demo.local/review/abc123token" },
+      request: row(),
+      delivery: { status: "cancelled" },
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByText("إعادة إرسال البريد"));
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledWith("إعادة إرسال البريد قيد المعالجة"));
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a deterministic error when copying the review link fails instead of failing silently", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.assign(navigator, { clipboard: { writeText } });
+    fetchContractReviews.mockResolvedValue([row()]);
+    renderPanel();
+
+    fireEvent.click(await screen.findByText("نسخ الرابط"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("تعذّر نسخ الرابط"));
   });
 });

@@ -26,6 +26,7 @@ const sendSignatureRequest = vi.fn();
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
+const toastInfo = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   apiErrorCode: (error: unknown, fallback: string) =>
@@ -45,7 +46,7 @@ vi.mock("@/components/feedback/ToastProvider", () => ({
     success: toastSuccess,
     error: toastError,
     warning: vi.fn(),
-    info: vi.fn(),
+    info: (...args: unknown[]) => toastInfo(...args),
     toast: vi.fn(),
   }),
 }));
@@ -266,6 +267,132 @@ describe("SignaturePanel cancellation", () => {
   });
 });
 
+function draftBundle() {
+  return {
+    request: {
+      id: REQUEST_ID,
+      contract_id: CONTRACT_ID,
+      provider: "simulated",
+      status: "draft",
+      subject: "Please sign",
+      message: null,
+      signing_order_enabled: true,
+      expires_at: "2026-12-01T00:00:00+00:00",
+      sent_at: null,
+      completed_at: null,
+      signed_file_url: null,
+      certificate_file_url: null,
+      signers: [
+        {
+          id: "signer-1",
+          signer_order: 1,
+          name: "Signer One",
+          email: "one@example.invalid",
+          role: "company_signatory",
+          status: "waiting",
+        },
+      ],
+      progress: { completed: 0, total: 1 },
+      is_stale: false,
+    },
+    events: [],
+    can_create: false,
+  };
+}
+
+describe("SignaturePanel send honesty", () => {
+  it("reports a real sent success only when every delivery is sent", async () => {
+    fetchSignatureBundle.mockResolvedValue(draftBundle());
+    sendSignatureRequest.mockResolvedValue({ deliveries: [{ status: "sent" }] });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إرسال طلب التوقيع"));
+
+    await waitFor(() => expect(sendSignatureRequest).toHaveBeenCalledWith(REQUEST_ID));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("تم إرسال طلب التوقيع"));
+    expect(toastError).not.toHaveBeenCalled();
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+
+  it("never claims success when any delivery failed", async () => {
+    fetchSignatureBundle.mockResolvedValue(draftBundle());
+    sendSignatureRequest.mockResolvedValue({ deliveries: [{ status: "failed" }] });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إرسال طلب التوقيع"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("تعذّر إرسال دعوة التوقيع"));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("never claims success when delivery is still pending/sending/cancelled/absent", async () => {
+    fetchSignatureBundle.mockResolvedValue(draftBundle());
+    sendSignatureRequest.mockResolvedValue({ deliveries: [{ status: "pending" }] });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إرسال طلب التوقيع"));
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledWith("دعوة التوقيع قيد الإرسال"));
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+});
+
+function allSignerStatusesBundle() {
+  const statuses = ["waiting", "invited", "opened", "signed", "declined", "expired"];
+  return {
+    request: {
+      id: REQUEST_ID,
+      contract_id: CONTRACT_ID,
+      provider: "simulated",
+      status: "partially_signed",
+      subject: "Please sign",
+      message: null,
+      signing_order_enabled: false,
+      expires_at: "2026-12-01T00:00:00+00:00",
+      sent_at: "2026-08-01T09:00:00+00:00",
+      completed_at: null,
+      signed_file_url: null,
+      certificate_file_url: null,
+      signers: statuses.map((status, index) => ({
+        id: `signer-${index + 1}`,
+        signer_order: index + 1,
+        name: `Signer ${index + 1}`,
+        email: `signer${index + 1}@example.invalid`,
+        role: "other",
+        status,
+        eligible: false,
+        signer_link: null,
+        delivery: null,
+      })),
+      progress: { completed: 1, total: statuses.length },
+      is_stale: false,
+    },
+    events: [],
+    can_create: false,
+  };
+}
+
+describe("SignaturePanel signer status labels", () => {
+  it("shows a visible bilingual label for every signer status (waiting/invited/opened/signed/declined/expired), never a blank status", async () => {
+    fetchSignatureBundle.mockResolvedValue(allSignerStatusesBundle());
+    renderPanel("ready_to_sign");
+
+    const expectedLabels = [
+      "بانتظار الدور",
+      "تمت الدعوة",
+      "تم الفتح",
+      "تم التوقيع",
+      "مرفوض",
+      "منتهي",
+    ];
+    for (let i = 0; i < expectedLabels.length; i++) {
+      const row = await screen.findByText(new RegExp(`Signer ${i + 1}`));
+      expect(row.textContent).toContain(expectedLabels[i]);
+    }
+  });
+});
+
 const SIGNER_ONE = "signer-1";
 const SIGNER_TWO = "signer-2";
 
@@ -397,5 +524,61 @@ describe("SignaturePanel signer delivery and eligibility", () => {
       expect(writeText).toHaveBeenCalledWith("https://demo.local/sign/first-signer-token")
     );
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("تم النسخ"));
+  });
+
+  it("never reports a notified success when the resend delivery is still pending/sending/cancelled", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    resendSignatureSigner.mockResolvedValue({
+      signer_link: "https://demo.local/sign/first-signer-token",
+      token: "first-signer-token",
+      email: {},
+      delivery: { status: "cancelled" },
+    });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إعادة إرسال"));
+
+    await waitFor(() => expect(toastInfo).toHaveBeenCalledWith("دعوة التوقيع قيد الإرسال"));
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a deterministic error when copying the signing link fails instead of failing silently", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.assign(navigator, { clipboard: { writeText } });
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("نسخ رابط الموقّع"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("تعذّر نسخ الرابط"));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("shows the signer's recipient email and the delivery's recorded recipient", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    renderPanel("ready_to_sign");
+
+    const signerOneRow = await screen.findByText(/Signer One/);
+    expect(signerOneRow.textContent).toContain("one@example.invalid");
+    expect(screen.getByText(/المستلم: one@example.invalid/)).toBeTruthy();
+  });
+
+  it("keeps exactly one scoped Copy action after a resend — no redundant ephemeral top-level copy button", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    resendSignatureSigner.mockResolvedValue({
+      signer_link: "https://demo.local/sign/first-signer-token",
+      token: "first-signer-token",
+      email: {},
+      delivery: { status: "sent" },
+    });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إعادة إرسال"));
+    await waitFor(() => expect(resendSignatureSigner).toHaveBeenCalled());
+
+    await waitFor(() =>
+      expect(screen.getAllByText("نسخ رابط الموقّع")).toHaveLength(1)
+    );
   });
 });

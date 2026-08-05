@@ -239,3 +239,244 @@ cd frontend && npm run build
 7d840f7 feat(review-signature): persisted delivery status, retry/copy actions, and deterministic public errors
 14 files changed, 1294 insertions(+), 40 deletions(-)
 ```
+
+## Fix round 1
+
+### Findings addressed
+
+- **CRITICAL — blank signer status.** `SignaturePanel`'s signer row reused the
+  request-level `signature.status.*` i18n namespace (draft/sent/viewed/
+  partially_signed/completed/declined/expired/cancelled) for the signer's own
+  status field, which actually holds a disjoint set of values
+  (`waiting`/`invited`/`opened`/`signed`/`declined`/`expired`). Every signer whose
+  status was `waiting`, `invited`, `opened`, or `signed` rendered a missing
+  translation as nothing (`t()` falls back through `ar` and still returns
+  `undefined` for a key that exists in neither dictionary), so the signer's status
+  was silently blank. Added a dedicated `signature.signerStatus.*` namespace with
+  all six values in both `ar`/`en`, and a `signerStatusKey()` helper distinct
+  from the existing request-level `statusKey()`.
+- **IMPORTANT — stale eligibility mismatch.** `serialize_signer_internal`'s
+  `eligible` flag only checked the signer's own status and the request's terminal
+  state, so a *stale* request (a newer contract version now exists) still
+  advertised `eligible: true` / a live `signer_link` for an otherwise-invited
+  signer — even though `resend_signer` itself would reject that exact resend with
+  `409 workflow_stale`. `serialize_signer_internal` now takes an `is_stale`
+  parameter (computed once per request via the same `is_stale_version` helper
+  already used for the request-level `is_stale` flag) and folds it into
+  `eligible`, so a stale request always reports `eligible: false` and
+  `signer_link: null` for every signer, matching what the resend endpoint would
+  actually accept.
+- **IMPORTANT — redundant ephemeral copy action.** `SignaturePanel` kept a
+  top-level `lastLink` state populated by `create()` and by the per-signer resend
+  handler, driving a second, ephemeral "Copy signer link" button in the action bar
+  that duplicated the persisted, scoped per-signer Copy button added in Task 5.
+  Removed `lastLink` entirely (state, both setters, and the top-level button); the
+  per-signer Copy button (gated on `eligible` + `signer_link`) is now the single
+  source of that action.
+- **IMPORTANT — masked `open` errors.** The public sign page's mount effect called
+  `openSignerPortal(token).then(setData).catch(load)`, where `load` fell back to a
+  plain `fetchSignerPortal` GET. Since the GET path never re-validates staleness
+  the way `open_signer` does, a `409 workflow_stale` (or any other) rejection from
+  `open` was silently swallowed and replaced by whatever the laxer GET returned —
+  potentially rendering the live signing form for a request that should have been
+  blocked. `load` now calls `openSignerPortal` directly (the same deterministic,
+  fully-validated endpoint) for both the initial mount and the "Retry" button, and
+  a rejection is surfaced immediately via `apiErrorCode` — there is no second,
+  less-strict call that could mask it. `fetchSignerPortal` is no longer imported
+  by this page.
+- **MINOR — delivery-status honesty.** `SendForReviewDialog`, `ReviewHistoryPanel`,
+  and `SignaturePanel` all previously treated "not failed" as "sent" (`else`
+  branches covered `pending`/`sending`/`cancelled`/absent delivery rows as a
+  claimed success). All three now use an explicit three-way check —
+  `"sent"` → success, `"failed"` → error, anything else → a new neutral
+  `toast.info(...)`/inline "still being delivered" message (`review.send.
+  successPending`, `review.retryPending`, `signature.deliveryPending`) — so a
+  send/resend can never be reported as delivered before it actually is.
+  `SignaturePanel.send()`'s multi-signer case now requires *every* delivery to be
+  `"sent"` before claiming success, and reports failure if *any* delivery failed.
+- **MINOR — persistent inline request error.** `SendForReviewDialog` restored a
+  persistent inline `error` state (shown on the form itself, not only as a
+  transient toast) for failures of the request itself (as opposed to a delivery
+  failure once the link already exists), so the failure remains visible even
+  after the toast auto-dismisses.
+- **MINOR — clipboard failures.** Every `navigator.clipboard.writeText(...)` call
+  (`SendForReviewDialog`, `ReviewHistoryPanel`, `SignaturePanel`) is now wrapped in
+  a `try`/`catch` that reports a deterministic `common.copyFailed` toast instead of
+  leaving an unhandled promise rejection and no user feedback.
+- **MINOR — recipient visibility.** `SignaturePanel` signer rows now show the
+  signer's own email next to their name, and the delivery block shows the
+  delivery's own recorded `recipient` (`delivery.recipient` — new i18n key),
+  matching `ReviewHistoryPanel`'s pre-existing recipient display.
+
+### Files changed
+
+- `backend/app/services/signature.py`,
+  `backend/tests/test_signature_lifecycle_integration.py`
+- `frontend/app/sign/[token]/page.tsx`, `frontend/app/sign/[token]/page.vitest.tsx`
+- `frontend/components/ReviewHistoryPanel.tsx`,
+  `frontend/components/ReviewHistoryPanel.vitest.tsx`
+- `frontend/components/SendForReviewDialog.tsx`,
+  `frontend/components/SendForReviewDialog.vitest.tsx`
+- `frontend/components/SignaturePanel.tsx`,
+  `frontend/components/SignaturePanel.vitest.tsx`
+- `frontend/lib/i18n.tsx`
+
+No changes were needed to `lib/api.ts` or `lib/types.ts` this round — the
+persisted delivery/eligibility fields and `resendContractReview` added in the
+initial pass already carried everything this round's fixes needed.
+
+### Strict TDD evidence
+
+#### Backend RED
+
+New test `test_bundle_marks_signer_ineligible_and_hides_link_once_request_is_stale`
+added to `test_signature_lifecycle_integration.py`, then the `is_stale` fix in
+`signature.py` was stashed (test kept):
+
+```text
+cd backend && python -m pytest tests/test_signature_lifecycle_integration.py::test_bundle_marks_signer_ineligible_and_hides_link_once_request_is_stale -q -p no:warnings
+```
+
+```text
+>       assert first["eligible"] is False
+E       assert True is False
+1 failed in 9.82s
+```
+
+#### Backend GREEN
+
+Implementation restored:
+
+```text
+cd backend && python -m pytest tests/test_signature_lifecycle_integration.py::test_bundle_marks_signer_ineligible_and_hides_link_once_request_is_stale tests/test_signature_lifecycle_integration.py::test_bundle_exposes_persisted_signer_delivery_only_for_eligible_signer -q -p no:warnings
+2 passed in 20.47s
+```
+
+Full focused regression:
+
+```text
+cd backend && python -m pytest tests/test_signature_lifecycle_integration.py -q -p no:warnings
+19 passed in 113.84s
+```
+
+#### Frontend RED
+
+Extended/added tests across all four component test files first (14 new test
+cases covering every finding above), then stashed only the five implementation
+files (`SignaturePanel.tsx`, `SendForReviewDialog.tsx`, `ReviewHistoryPanel.tsx`,
+`app/sign/[token]/page.tsx`, `lib/i18n.tsx`) while keeping every test file:
+
+```text
+cd frontend && npx vitest run --reporter=basic
+```
+
+```text
+ Test Files  4 failed | 5 passed (9)
+      Tests  14 failed | 50 passed (64)
+```
+
+The 14 failures were exactly the new round-1 assertions:
+- `ReviewHistoryPanel`: retry-pending honesty, copy-failure toast (2)
+- Public sign page: deterministic error surfacing, `workflow_stale` form
+  suppression, retry-uses-same-call (3 — two of these failed because the old
+  masking implementation still depended on a `fetchSignerPortal` mock the
+  rewritten test intentionally no longer provides, which itself demonstrates the
+  old code path being exercised)
+- `SendForReviewDialog`: persistent inline error, pending honesty, copy-failure
+  toast (3)
+- `SignaturePanel`: send-pending honesty, signer-status-label visibility,
+  resend-pending honesty, copy-failure toast, recipient-email display, exactly-
+  one-copy-action (6)
+
+Every pre-existing (Task 5 initial pass) test kept passing unmodified.
+
+#### Frontend GREEN
+
+Implementation restored:
+
+```text
+cd frontend && npx vitest run --reporter=basic
+ ✓ lib/pipeline.vitest.ts (11 tests)
+ ✓ components/contract/AiSummaryPanel.vitest.tsx (1 test)
+ ✓ components/SourceViewer.vitest.tsx (4 tests)
+ ✓ app/sign/[token]/page.vitest.tsx (8 tests)
+ ✓ components/ReviewHistoryPanel.vitest.tsx (8 tests)
+ ✓ components/SendForReviewDialog.vitest.tsx (6 tests)
+ ✓ components/SignaturePanel.vitest.tsx (22 tests)
+ ✓ components/SourceViewer.ssr.vitest.ts (2 tests)
+ ✓ lib/api.vitest.ts (2 tests)
+
+ Test Files  9 passed (9)
+      Tests  64 passed (64)
+```
+
+#### Type check and production build
+
+```text
+cd frontend && npx tsc --noEmit
+(exit 0, no output)
+
+cd frontend && npm run build
+ ✓ Compiled successfully
+ ✓ Generating static pages (19/19)
+```
+
+### Self-review
+
+- Grepped every changed file for `console.log|error|warn|info|debug` and
+  `logger.`/`logging.` — none were added; no signing/review token or link is
+  logged anywhere in this round's changes either.
+- Confirmed the new `signature.signerStatus.*` namespace is genuinely disjoint
+  from `signature.status.*` in usage: `statusKey()` (request-level, `Badge` at the
+  top of `RequestView`) is untouched; only the per-signer `<span>` now calls the
+  new `signerStatusKey()`.
+- Confirmed the stale-eligibility fix reuses the exact same `is_stale_version`
+  helper the request-level `is_stale` flag already used (no new staleness
+  semantics introduced), and added a persisted test that checks the *resend
+  endpoint itself* also returns `409 workflow_stale` for the same signer in the
+  same scenario — i.e. the exposed `eligible` flag and the endpoint's real
+  behavior are proven to agree, not just independently asserted.
+- Confirmed `fetchSignerPortal` (now unused by the page) was left defined in
+  `lib/api.ts` rather than deleted, since it is a thin, harmless wrapper around a
+  real public GET route that may still be useful for read-only tooling; only its
+  use inside the page component (the actual source of the masking bug) was
+  removed.
+- Confirmed `open_signer` is safe to call repeatedly: rereading the backend, a
+  second call for an already-opened signer re-runs every validation (stale,
+  expired, terminal, `not_active_signer`) and then falls through to a harmless
+  `db.rollback()` before returning the same payload — so routing the "Retry"
+  button through the same `openSignerPortal` call (instead of a separate GET) is
+  correct and not merely a workaround.
+- Verified the three-way delivery-status honesty logic is consistent across all
+  three call sites (send-dialog submit, review retry, signature send/resend): a
+  literal `"sent"` is required for success, a literal `"failed"` is required for
+  error, and every other value (`"pending"`, `"sending"`, `"cancelled"`, or an
+  absent delivery row) now takes the neutral `info` branch — no site was left on
+  the old "anything but failed is a success" logic.
+- Confirmed every new/changed string has both an `ar` and an `en` entry.
+
+### Concerns
+
+- `SendForReviewDialog`'s persistent inline error and the transient toast now
+  both display the same `apiErrorCode` text for a request failure; this is
+  intentional duplication (persistent context on the form + immediate
+  notification) rather than a bug, matching how the delivery-failure inline block
+  already worked.
+- The "pending" honesty branches (`review.send.successPending`,
+  `review.retryPending`, `signature.deliveryPending`) are exercised by tests with
+  a mocked `"pending"`/`"cancelled"` delivery status, but in the current demo/
+  simulated email provider the real backend resolves every delivery attempt to
+  `"sent"` or `"failed"` synchronously within the request/response cycle, so
+  these branches are not expected to be reachable in the current demo deployment
+  — they exist for correctness/future-proofing (e.g. a real async SMTP provider)
+  rather than a currently-observable state.
+- `fetchSignerPortal` in `lib/api.ts` is now unused in the frontend (kept for the
+  reason above); if a linter/dead-code check is later added to this repo, it may
+  flag this export.
+
+### Commit
+
+```text
+bf4031f fix(review-signature): fix round 1 — signer status i18n, stale eligibility, delivery honesty
+12 files changed, 690 insertions(+), 62 deletions(-)
+```

@@ -381,7 +381,10 @@ def create_request(
             storage.delete(key)
         raise
 
+    from .versions import is_stale_version
+
     emails = [build_invitation_email(contract, req, sr, t["signer_link"]) for sr, t in zip(signer_rows, tokens_out)]
+    request_is_stale = is_stale_version(req.version_id, req.contract_id, db)
     return {
         "request": serialize_request(req, db),
         "signers": [
@@ -391,6 +394,7 @@ def create_request(
                 contract_id=req.contract_id,
                 signature_request_id=req.id,
                 request_status=req.status,
+                is_stale=request_is_stale,
             )
             for s in signer_rows
         ],
@@ -866,6 +870,7 @@ def serialize_signer_internal(
     contract_id,
     signature_request_id,
     request_status: str,
+    is_stale: bool = False,
 ) -> dict:
     delivery = latest_delivery(
         db,
@@ -874,8 +879,12 @@ def serialize_signer_internal(
         signature_request_id=signature_request_id,
         signer_id=s.id,
     )
+    # Must match `resend_signer`'s own guard exactly: it rejects a stale request
+    # with `workflow_stale` before it ever checks signer status, so a stale
+    # request can never advertise an action the endpoint would refuse.
     eligible = (
-        request_status not in TERMINAL_REQUEST_STATUSES
+        not is_stale
+        and request_status not in TERMINAL_REQUEST_STATUSES
         and s.status in _RESENDABLE_SIGNER_STATUSES
     )
     out = {
@@ -904,6 +913,7 @@ def serialize_request(req: SignatureRequest, db: Session) -> dict:
 
     signers = _signers_for(req.id, db)
     completed = sum(1 for s in signers if s.status == "signed")
+    request_is_stale = is_stale_version(req.version_id, req.contract_id, db)
     return {
         "id": str(req.id),
         "contract_id": str(req.contract_id),
@@ -928,11 +938,12 @@ def serialize_request(req: SignatureRequest, db: Session) -> dict:
                 contract_id=req.contract_id,
                 signature_request_id=req.id,
                 request_status=req.status,
+                is_stale=request_is_stale,
             )
             for s in signers
         ],
         "progress": {"completed": completed, "total": len(signers)},
-        "is_stale": is_stale_version(req.version_id, req.contract_id, db),
+        "is_stale": request_is_stale,
         "version_id": str(req.version_id) if req.version_id else None,
     }
 

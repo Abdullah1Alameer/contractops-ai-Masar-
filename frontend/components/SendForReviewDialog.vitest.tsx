@@ -20,6 +20,7 @@ const sendContractForReview = vi.fn();
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
+const toastInfo = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   apiErrorCode: (error: unknown, fallback: string) =>
@@ -32,14 +33,14 @@ vi.mock("@/components/feedback/ToastProvider", () => ({
     success: toastSuccess,
     error: toastError,
     warning: vi.fn(),
-    info: vi.fn(),
+    info: (...args: unknown[]) => toastInfo(...args),
     toast: vi.fn(),
   }),
 }));
 
 const CONTRACT_ID = "00000000-0000-0000-0000-000000000010";
 
-function response(deliveryStatus: "sent" | "failed") {
+function response(deliveryStatus: "sent" | "failed" | "pending") {
   return {
     review_link: "https://demo.local/review/abc123token",
     email: { subject: "Please review", body: "body", review_link: "https://demo.local/review/abc123token" },
@@ -138,5 +139,63 @@ describe("SendForReviewDialog delivery honesty", () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("invalid_email"));
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("keeps a persistent inline error on the form when the request itself fails, not just a transient toast", async () => {
+    sendContractForReview.mockRejectedValue(new FakeApiError(422, "invalid_email"));
+    renderDialog();
+
+    fireEvent.click(screen.getByText("إرسال للمراجعة"));
+    fireEvent.change(screen.getByRole("textbox", { name: "اسم المستلم" }), {
+      target: { value: "Client Contact" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "البريد الإلكتروني" }), {
+      target: { value: "client@example.invalid" },
+    });
+    fireEvent.click(screen.getByText("إنشاء رابط المراجعة"));
+
+    // Distinct from the toast assertion above: this must remain in the DOM,
+    // not disappear once the (auto-dismissing) toast is gone.
+    expect(await screen.findByText("invalid_email")).toBeTruthy();
+  });
+
+  it("never claims a real send when delivery is still pending/sending/cancelled/absent", async () => {
+    sendContractForReview.mockResolvedValue(response("pending"));
+    renderDialog();
+
+    fireEvent.click(screen.getByText("إرسال للمراجعة"));
+    fireEvent.change(screen.getByRole("textbox", { name: "اسم المستلم" }), {
+      target: { value: "Client Contact" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "البريد الإلكتروني" }), {
+      target: { value: "client@example.invalid" },
+    });
+    fireEvent.click(screen.getByText("إنشاء رابط المراجعة"));
+
+    expect(await screen.findByText("تم إنشاء رابط المراجعة، وإرسال البريد الإلكتروني قيد المعالجة")).toBeTruthy();
+    await waitFor(() =>
+      expect(toastInfo).toHaveBeenCalledWith("تم إنشاء رابط المراجعة، وإرسال البريد الإلكتروني قيد المعالجة")
+    );
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a deterministic error when copying the review link fails instead of failing silently", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.assign(navigator, { clipboard: { writeText } });
+    sendContractForReview.mockResolvedValue(response("sent"));
+    renderDialog();
+
+    fireEvent.click(screen.getByText("إرسال للمراجعة"));
+    fireEvent.change(screen.getByRole("textbox", { name: "اسم المستلم" }), {
+      target: { value: "Client Contact" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "البريد الإلكتروني" }), {
+      target: { value: "client@example.invalid" },
+    });
+    fireEvent.click(screen.getByText("إنشاء رابط المراجعة"));
+    fireEvent.click(await screen.findByText("نسخ الرابط"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("تعذّر نسخ الرابط"));
   });
 });

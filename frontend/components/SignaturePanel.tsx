@@ -32,6 +32,13 @@ function statusKey(s: string): TKey {
   return `signature.status.${s}` as TKey;
 }
 
+// Signer-level statuses (waiting/invited/opened/signed/declined/expired) are a
+// distinct set from request-level statuses above and live in their own i18n
+// namespace so a signer row never falls back to a blank/missing translation.
+function signerStatusKey(s: string): TKey {
+  return `signature.signerStatus.${s}` as TKey;
+}
+
 export default function SignaturePanel({
   contractId,
   contractStage,
@@ -50,7 +57,6 @@ export default function SignaturePanel({
   const [bundle, setBundle] = useState<SignatureBundleResponse | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
-  const [lastLink, setLastLink] = useState<string | null>(null);
   const [activated, setActivated] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [activationReason, setActivationReason] = useState("");
@@ -82,9 +88,7 @@ export default function SignaturePanel({
   const create = async (body: Parameters<typeof createSignatureRequest>[1]) => {
     setPending("create");
     try {
-      const out = await createSignatureRequest(contractId, body);
-      const link = (out as { signer_links?: { signer_link: string }[] }).signer_links?.[0]?.signer_link;
-      if (link) setLastLink(link);
+      await createSignatureRequest(contractId, body);
       setDialogOpen(false);
       load();
       toast.success(t("signature.create"));
@@ -107,12 +111,18 @@ export default function SignaturePanel({
           const out = await sendSignatureRequest(req.id);
           load();
           // The request/link is always persisted at this point; only the invitation
-          // email itself may have failed, so success must reflect actual delivery.
-          const failed = (out.deliveries ?? []).some((d) => d.status === "failed");
-          if (failed) {
+          // email itself may have failed or still be in flight, so success must
+          // reflect actual delivery — never claim "sent" for pending/sending/
+          // cancelled/absent delivery rows.
+          const deliveries = out.deliveries ?? [];
+          const anyFailed = deliveries.some((d) => d.status === "failed");
+          const allSent = deliveries.length > 0 && deliveries.every((d) => d.status === "sent");
+          if (anyFailed) {
             toast.error(t("signature.deliveryFailed"));
-          } else {
+          } else if (allSent) {
             toast.success(t("signature.sent"));
+          } else {
+            toast.info(t("signature.deliveryPending"));
           }
           await onLifecycleChange?.();
         } catch (error) {
@@ -224,18 +234,6 @@ export default function SignaturePanel({
             {t("signature.downloadCert")}
           </Button>
         )}
-        {lastLink && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={async () => {
-              await navigator.clipboard.writeText(lastLink);
-              toast.success(t("negotiation.copied"));
-            }}
-          >
-            {t("signature.copyLink")}
-          </Button>
-        )}
       </div>
 
       {req && !["completed", "declined", "cancelled", "expired"].includes(req.status) && (
@@ -309,13 +307,14 @@ export default function SignaturePanel({
               setPending(`resend-${signerId}`);
               try {
                 const r = await resendSignatureSigner(req.id, signerId);
-                setLastLink(r.signer_link);
-                // Persist honesty about delivery: a resend that fails to reach the
-                // signer must never be reported as a successful send.
+                // Persist honesty about delivery: a resend that fails, or has not
+                // yet confirmed delivery, must never be reported as a real send.
                 if (r.delivery?.status === "failed") {
                   toast.error(t("signature.deliveryFailed"));
-                } else {
+                } else if (r.delivery?.status === "sent") {
                   toast.success(t("signature.deliverySent"));
+                } else {
+                  toast.info(t("signature.deliveryPending"));
                 }
                 load();
               } catch (error) {
@@ -325,8 +324,12 @@ export default function SignaturePanel({
               }
             }}
             onCopyLink={async (link) => {
-              await navigator.clipboard.writeText(link);
-              toast.success(t("common.copied"));
+              try {
+                await navigator.clipboard.writeText(link);
+                toast.success(t("common.copied"));
+              } catch (error) {
+                toast.error(apiErrorCode(error, t("common.copyFailed")));
+              }
             }}
           />
         </>
@@ -385,7 +388,8 @@ function RequestView({
             <li key={s.id} className="flex flex-col gap-2 rounded border p-2 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span>
-                  {s.signer_order}. {s.name} — {t(`signature.role.${s.role}` as TKey)} — {t(statusKey(s.status))}
+                  {s.signer_order}. {s.name} ({s.email}) — {t(`signature.role.${s.role}` as TKey)} —{" "}
+                  {t(signerStatusKey(s.status))}
                 </span>
                 {/* Only the currently eligible (invited/opened) signer exposes Retry
                     and Copy Link — future, not-yet-invited signers get no invite
@@ -406,6 +410,9 @@ function RequestView({
               {s.delivery && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
                   <DeliveryStatusBadge status={s.delivery.status} />
+                  <span>
+                    {t("delivery.recipient")}: {s.delivery.recipient}
+                  </span>
                   <span>
                     {t("delivery.attempts")}: {s.delivery.attempt_count}
                   </span>

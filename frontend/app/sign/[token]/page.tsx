@@ -11,7 +11,6 @@ import { Card, CardBody } from "@/components/ui/Card";
 import {
   apiErrorCode,
   declineSignerPortal,
-  fetchSignerPortal,
   openSignerPortal,
   publicSignDocumentUrl,
   submitSignerPortal,
@@ -48,18 +47,19 @@ export default function SignPage() {
   const [declineReason, setDeclineReason] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // A single deterministic entry point for both the initial mount and manual
+  // retry. `open` re-validates staleness/expiry/eligibility on every call (it is
+  // safe to repeat once already opened), so a rejection here must be surfaced
+  // immediately — never silently swapped for a second, less-strict read that
+  // could mask a real `workflow_stale`/`expired`/`not_active_signer` error.
   const load = useCallback(() => {
     setErrorCode(null);
-    fetchSignerPortal(token)
+    openSignerPortal(token)
       .then(setData)
       .catch((caught) => setErrorCode(apiErrorCode(caught, "unknown")));
   }, [token]);
 
-  useEffect(() => {
-    openSignerPortal(token)
-      .then(setData)
-      .catch(load);
-  }, [token, load]);
+  useEffect(load, [load]);
 
   const submit = async () => {
     if (!data || !consent) return;

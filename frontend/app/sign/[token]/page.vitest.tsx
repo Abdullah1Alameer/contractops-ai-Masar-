@@ -16,7 +16,6 @@ class FakeApiError extends Error {
   }
 }
 
-const fetchSignerPortal = vi.fn();
 const openSignerPortal = vi.fn();
 const submitSignerPortal = vi.fn();
 const declineSignerPortal = vi.fn();
@@ -31,7 +30,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api", () => ({
   apiErrorCode: (error: unknown, fallback: string) =>
     error instanceof FakeApiError ? error.code : fallback,
-  fetchSignerPortal: (...args: unknown[]) => fetchSignerPortal(...args),
   openSignerPortal: (...args: unknown[]) => openSignerPortal(...args),
   submitSignerPortal: (...args: unknown[]) => submitSignerPortal(...args),
   declineSignerPortal: (...args: unknown[]) => declineSignerPortal(...args),
@@ -70,7 +68,6 @@ beforeEach(() => {
 
 describe("Public sign page — deterministic errors and disclosure", () => {
   it("shows the bilingual demo disclosure while loading", () => {
-    fetchSignerPortal.mockReturnValue(new Promise(() => {}));
     openSignerPortal.mockReturnValue(new Promise(() => {}));
     renderPage();
 
@@ -79,11 +76,32 @@ describe("Public sign page — deterministic errors and disclosure", () => {
 
   it("surfaces the deterministic API error code instead of a generic silent failure", async () => {
     openSignerPortal.mockRejectedValue(new FakeApiError(410, "expired"));
-    fetchSignerPortal.mockRejectedValue(new FakeApiError(410, "expired"));
     renderPage();
 
     expect(await screen.findByText(/expired/)).toBeTruthy();
     expect(screen.getByText(DISCLOSURE_TEXT)).toBeTruthy();
+  });
+
+  it("shows the workflow_stale error and hides/disables the signing form instead of masking it with a second call", async () => {
+    openSignerPortal.mockRejectedValue(new FakeApiError(409, "workflow_stale"));
+    renderPage();
+
+    expect(await screen.findByText(/workflow_stale/)).toBeTruthy();
+    // The active signing form (submit button, name-confirmation field) must never
+    // render while the open call is rejected — no fallback read may mask this.
+    expect(screen.queryByText("توقيع وإرسال")).toBeNull();
+    expect(screen.queryByPlaceholderText("تأكيد الاسم كما في الدعوة")).toBeNull();
+    expect(openSignerPortal).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries through the same deterministic open call, not a separate less-strict read", async () => {
+    openSignerPortal.mockRejectedValue(new FakeApiError(409, "workflow_stale"));
+    renderPage();
+
+    await screen.findByText(/workflow_stale/);
+    fireEvent.click(screen.getByText("إعادة المحاولة"));
+
+    await waitFor(() => expect(openSignerPortal).toHaveBeenCalledTimes(2));
   });
 
   it("keeps the disclosure visible on the declined state", async () => {

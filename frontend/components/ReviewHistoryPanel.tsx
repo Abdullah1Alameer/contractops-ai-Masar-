@@ -57,12 +57,14 @@ export default function ReviewHistoryPanel({
     try {
       const res = await resendContractReview(contractId, reviewId);
       load();
-      // A resend can itself fail delivery; never announce success unless the
-      // persisted attempt actually reports "sent".
-      if (res.delivery?.status === "failed") {
+      // A resend can itself fail or still be in flight; never announce success
+      // unless the persisted attempt actually reports "sent".
+      if (res.delivery?.status === "sent") {
+        toast.success(t("review.retrySuccess"));
+      } else if (res.delivery?.status === "failed") {
         toast.error(t("review.retryFailed"));
       } else {
-        toast.success(t("review.retrySuccess"));
+        toast.info(t("review.retryPending"));
       }
     } catch (caught) {
       toast.error(apiErrorCode(caught, t("common.error")));
@@ -72,9 +74,13 @@ export default function ReviewHistoryPanel({
   };
 
   const copyLink = async (reviewId: string, link: string) => {
-    await navigator.clipboard.writeText(link);
-    setCopiedId(reviewId);
-    setTimeout(() => setCopiedId((current) => (current === reviewId ? null : current)), 2000);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedId(reviewId);
+      setTimeout(() => setCopiedId((current) => (current === reviewId ? null : current)), 2000);
+    } catch (caught) {
+      toast.error(apiErrorCode(caught, t("common.copyFailed")));
+    }
   };
 
   if (loading) return <SkeletonCard rows={3} />;

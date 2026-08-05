@@ -306,6 +306,49 @@ def test_bundle_exposes_persisted_signer_delivery_only_for_eligible_signer(
     assert second_after["signer_link"] is not None and second_after["signer_link"].endswith(second_token)
 
 
+def test_bundle_marks_signer_ineligible_and_hides_link_once_request_is_stale(
+    signature_db, monkeypatch
+):
+    """A stale request (superseded contract version) must never advertise a
+    resend/copy-link action that `resend_signer` would itself reject."""
+    db, create_contract = signature_db
+    contract, version = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("sent", "message-id", None, datetime.now(timezone.utc)),
+    )
+    client = TestClient(app)
+    created = _create(client, contract.id)
+    request_id = created["request"]["id"]
+    first_signer_id = created["request"]["signers"][0]["id"]
+    _send(client, request_id)
+
+    version.is_current = False
+    db.add(
+        ContractVersion(
+            id=uuid4(), contract_id=contract.id, version_number=2, version_label="v2",
+            source="manual_upload", status="ready", file_path=contract.file_url,
+            is_current=True, created_by="synthetic-test",
+        )
+    )
+    db.commit()
+
+    bundle = client.get(f"/api/contracts/{contract.id}/signature-request", headers=AUTH).json()
+    first, second = bundle["request"]["signers"]
+    assert bundle["request"]["is_stale"] is True
+    assert first["status"] == "invited"
+    assert first["eligible"] is False
+    assert first["signer_link"] is None
+    assert second["eligible"] is False
+    assert second["signer_link"] is None
+
+    resend = client.post(
+        f"/api/signature-requests/{request_id}/resend/{first_signer_id}", headers=AUTH
+    )
+    assert resend.status_code == 409
+    assert resend.json()["detail"]["error"] == "workflow_stale"
+
+
 def test_ordered_signing_persists_partial_then_signed_without_auto_activation(
     signature_db, monkeypatch
 ):
