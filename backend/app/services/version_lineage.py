@@ -541,7 +541,7 @@ def build_lineage(contract_id, db: Session) -> dict:
                             "description": step.comment,
                             "actor": step.approver_name,
                             "actor_role": step.role,
-                            "timestamp": _iso(step.decided_at),
+                            "timestamp": _iso(step.acted_at),
                             "status": step.status,
                             "related_entity_type": "approval_step",
                             "related_entity_id": str(step.id),
@@ -553,7 +553,7 @@ def build_lineage(contract_id, db: Session) -> dict:
                             },
                             "source_version_id": None,
                             "target_version_id": None,
-                            "_sort_ts": step.decided_at,
+                            "_sort_ts": step.acted_at,
                             "_dedupe_key": (str(v.id), "approval_step_approved", str(step.id)),
                         }
                     )
