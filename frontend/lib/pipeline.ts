@@ -76,6 +76,7 @@ const KNOWN_STAGES = new Set([
   "negotiation",
   "internal_review",
   "approved",
+  "ready_to_sign",
   "awaiting_signature",
   "partially_signed",
   "signed",
@@ -150,6 +151,7 @@ export function bucketContract(c: HomeContractRow): PipelineKey {
 
   if (stage === "signed" || signature === "completed") return "signed";
   if (
+    stage === "ready_to_sign" ||
     stage === "awaiting_signature" ||
     stage === "partially_signed" ||
     ["created", "sent", "viewed", "partially_signed"].includes(signature ?? "")

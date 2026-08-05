@@ -7,6 +7,7 @@ const STAGE_TONE: Record<string, "subtle" | "info" | "warning" | "success" | "pu
   negotiation: "info",
   client_review: "warning",
   internal_review: "purple",
+  ready_to_sign: "orange",
   awaiting_signature: "orange",
   partially_signed: "warning",
   approved: "success",

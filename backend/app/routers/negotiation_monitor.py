@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import demo_role
+from ..services.lifecycle import LifecycleError
+from ..services.negotiation import NegotiationError
 from ..services.negotiation_monitor import service as mon_svc
 from ..services.negotiation_monitor import outbound as outbound_svc
 from ..services.negotiation_monitor.memory import get_counterparty_memory
@@ -63,6 +65,11 @@ class SendResponseBody(BaseModel):
     override_reason: str | None = None
 
 
+class CounterpartyResponseBody(BaseModel):
+    decision: str = Field(pattern="^(accept|reject|changes_requested)$")
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 def _err(code: str, status: int = 400):
     raise HTTPException(status_code=status, detail={"code": code})
 
@@ -71,6 +78,8 @@ def _err(code: str, status: int = 400):
 def create_thread(body: ThreadCreate, db: Session = Depends(get_db), actor: str = Depends(demo_role)):
     try:
         return mon_svc.service.create_thread(db, body.model_dump(), actor=actor)
+    except (NegotiationError, LifecycleError) as error:
+        raise HTTPException(error.status_code, detail=error.payload)
     except ValueError as e:
         _err(str(e))
 
@@ -97,6 +106,8 @@ def get_thread(thread_id: uuid.UUID, db: Session = Depends(get_db)):
 def patch_thread(thread_id: uuid.UUID, body: ThreadPatch, db: Session = Depends(get_db)):
     try:
         return mon_svc.service.patch_thread(thread_id, db, body.model_dump(exclude_unset=True))
+    except (NegotiationError, LifecycleError) as error:
+        raise HTTPException(error.status_code, detail=error.payload)
     except ValueError as e:
         _err(str(e), 404 if str(e) == "not_found" else 400)
 
@@ -115,6 +126,8 @@ def import_email(
 ):
     try:
         return mon_svc.service.import_email_to_thread(thread_id, db, payload=body.model_dump(), actor=actor)
+    except (NegotiationError, LifecycleError) as error:
+        raise HTTPException(error.status_code, detail=error.payload)
     except ValueError as e:
         _err(str(e))
 
@@ -128,8 +141,32 @@ def analyze_thread(
 ):
     try:
         return mon_svc.service.analyze_thread(thread_id, db, email_id=email_id, actor=actor)
+    except (NegotiationError, LifecycleError) as error:
+        raise HTTPException(error.status_code, detail=error.payload)
     except ValueError as e:
         _err(str(e))
+
+
+@router.post("/threads/{thread_id}/response")
+def record_counterparty_response(
+    thread_id: uuid.UUID,
+    body: CounterpartyResponseBody,
+    db: Session = Depends(get_db),
+    actor: str = Depends(demo_role),
+):
+    try:
+        return mon_svc.service.record_thread_response(
+            thread_id,
+            db,
+            decision=body.decision,
+            actor=actor,
+            reason=body.reason,
+        )
+    except (NegotiationError, LifecycleError) as error:
+        raise HTTPException(error.status_code, detail=error.payload)
+    except ValueError as error:
+        code = str(error)
+        _err(code, 404 if code == "negotiation_not_found" else 400)
 
 
 @router.post("/emails/{email_id}/link-contract")
@@ -175,6 +212,8 @@ def patch_package(package_id: uuid.UUID, body: PackagePatch, db: Session = Depen
     if pkg is None:
         _err("not_found", 404)
     data = body.model_dump(exclude_unset=True)
+    if data.get("status") not in (None, "edited"):
+        _err("invalid_stage_transition", 409)
     if data.get("lawyer_edited_json"):
         pkg.lawyer_edited_json = data["lawyer_edited_json"]
     for k in ("draft_email_body_en", "draft_email_body_ar", "draft_email_subject_en", "draft_email_subject_ar", "status"):

@@ -3,7 +3,9 @@
 run_extraction(contract_id, db) is IDEMPOTENT: re-running deletes previous
 clauses/extractions/obligations for the contract and redoes them.
 
-Writes ONLY to: contracts, clauses, extractions, obligations.
+Writes ONLY to: contracts, clauses, extractions, obligations. Rows that outlive
+re-extraction (deadlines, payment milestones, flowdown findings) keep their own
+state; only their stale clause links are cleared before old clauses are deleted.
 notice_periods / payment_milestones / penalties / obligations lists are also
 stored inside extractions.value_json for the F2/F3 engines to consume
 (see docs/README_HANDOFF.md).
@@ -14,7 +16,7 @@ import uuid as _uuid
 
 from sqlalchemy.orm import Session
 
-from ..models import Clause, Contract, Extraction, Obligation
+from ..models import Clause, Contract, Deadline, Extraction, FlowdownFinding, Obligation, PaymentMilestone
 from ..services.dates import parse_date_raw
 from ..services.storage import storage
 from ..services.textextract import build_raw_text, extract_pages, extract_pages_geometry, layout_from_geometry
@@ -41,6 +43,32 @@ _DATE_FIELDS = {
     "bond_expiry": "bond_expiry_raw",
     "warranty_end": "warranty_end_raw",
 }
+
+
+def unlink_clause_references(contract_id, db: Session) -> None:
+    """Drop clause links held by rows that outlive re-extraction.
+
+    Deadlines, payment milestones and flowdown findings keep human state
+    (status, paid, decisions) across versions, so they are not wiped here. Their
+    clause foreign keys have no ON DELETE rule, so the links must be cleared
+    before old clauses are deleted; the F2/F3 engines relink them afterwards.
+    """
+    db.query(Deadline).filter(
+        Deadline.contract_id == contract_id,
+        Deadline.source_clause_id.isnot(None),
+    ).update({Deadline.source_clause_id: None}, synchronize_session=False)
+    db.query(PaymentMilestone).filter(
+        PaymentMilestone.contract_id == contract_id,
+        PaymentMilestone.source_clause_id.isnot(None),
+    ).update({PaymentMilestone.source_clause_id: None}, synchronize_session=False)
+    db.query(FlowdownFinding).filter(
+        FlowdownFinding.main_contract_id == contract_id,
+        FlowdownFinding.main_clause_id.isnot(None),
+    ).update({FlowdownFinding.main_clause_id: None}, synchronize_session=False)
+    db.query(FlowdownFinding).filter(
+        FlowdownFinding.subcontract_id == contract_id,
+        FlowdownFinding.sub_clause_id.isnot(None),
+    ).update({FlowdownFinding.sub_clause_id: None}, synchronize_session=False)
 
 
 def run_extraction(contract_id, db: Session) -> dict:
@@ -91,6 +119,7 @@ def run_extraction(contract_id, db: Session) -> dict:
     result, n_chunks = _run_model(norm_text, pages)
 
     # ---- Idempotency: wipe previous output (FK order matters) ----
+    unlink_clause_references(contract.id, db)
     db.query(Obligation).filter(Obligation.contract_id == contract.id).delete()
     db.query(Extraction).filter(Extraction.contract_id == contract.id).delete()
     db.query(Clause).filter(Clause.contract_id == contract.id).delete()
@@ -310,6 +339,7 @@ def _run_consent_extraction(
     contract.type = None
     contract.relationship_type = "standalone"
 
+    unlink_clause_references(contract.id, db)
     db.query(Obligation).filter(Obligation.contract_id == contract.id).delete()
     db.query(Extraction).filter(Extraction.contract_id == contract.id).delete()
     db.query(Clause).filter(Clause.contract_id == contract.id).delete()

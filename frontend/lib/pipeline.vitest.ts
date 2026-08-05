@@ -50,6 +50,17 @@ describe("bucketContract", () => {
     ).toBe("internal_review");
   });
 
+  it("maps a fully approved contract to awaiting_signature", () => {
+    expect(
+      bucketContract(
+        row({
+          stage: "ready_to_sign",
+          workflow_summary: workflow({ approval_status: "approved" }),
+        })
+      )
+    ).toBe("awaiting_signature");
+  });
+
   it("maps a sent signature request to awaiting_signature", () => {
     expect(
       bucketContract(row({ workflow_summary: workflow({ signature_status: "sent" }) }))

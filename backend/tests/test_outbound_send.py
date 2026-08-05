@@ -7,6 +7,12 @@ import pytest
 from app.services.negotiation_monitor import outbound as outbound_svc
 
 
+def test_send_requires_explicit_human_package_approval():
+    package = MagicMock(status="ready")
+    with pytest.raises(ValueError, match="package_not_approved"):
+        outbound_svc.send_approved_response(MagicMock(), package, actor="legal")
+
+
 def test_send_blocked_without_approval():
     pkg = MagicMock()
     pkg.status = "approved"
@@ -60,8 +66,7 @@ def test_send_with_override(mock_connector):
     db.commit = MagicMock()
     db.refresh = MagicMock()
     with patch.object(outbound_svc.appr_svc, "get_active_workflow", return_value=None):
-        with patch.object(outbound_svc, "open_round"):
-            with patch.object(outbound_svc, "close_round"):
-                with patch.object(outbound_svc, "log_monitor_event"):
-                    outbound_svc.send_approved_response(db, pkg, actor="legal", override_reason="demo")
+        with patch.object(outbound_svc, "close_round"):
+            with patch.object(outbound_svc, "log_monitor_event"):
+                outbound_svc.send_approved_response(db, pkg, actor="legal", override_reason="demo")
     assert db.add.called

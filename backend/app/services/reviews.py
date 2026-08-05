@@ -555,6 +555,7 @@ def create_review_request(
     sender_email: str | None = None,
     expires_in_days: int = DEFAULT_EXPIRY_DAYS,
     review_context: str = _INITIAL_REVIEW,
+    commit: bool = True,
 ) -> ReviewRequest:
     if review_context not in {_INITIAL_REVIEW, _NEGOTIATION_FOLLOWUP}:
         _raise_review_error(422, "invalid_transition_payload")
@@ -633,7 +634,10 @@ def create_review_request(
             actor_type="internal",
             transition=transition,
         )
-        _commit(db, req, contract)
+        if commit:
+            _commit(db, req, contract)
+        else:
+            db.flush()
         return req
     except Exception:
         db.rollback()
@@ -687,10 +691,17 @@ def record_decision(
         current = _locked_current_version(req.contract_id, db)
         if _is_stale(req, current):
             _raise_review_error(409, "workflow_stale")
+        is_followup = _is_negotiation_followup(req, db)
         if not can_respond(req):
-            _raise_review_error(409, "review_closed")
+            _raise_review_error(
+                409,
+                "negotiation_closed" if is_followup else "review_closed",
+            )
         if db.query(ReviewResponse).filter_by(review_request_id=req.id).first():
-            _raise_review_error(409, "review_closed")
+            _raise_review_error(
+                409,
+                "negotiation_closed" if is_followup else "review_closed",
+            )
         if decision == "reject" and not clean_comment:
             _raise_review_error(422, "review_reason_required")
 
@@ -722,8 +733,8 @@ def record_decision(
             )
         )
 
-        is_followup = _is_negotiation_followup(req, db)
         transition = None
+        negotiation_result = None
         if not is_followup:
             transition = _transition_review(
                 contract,
@@ -732,6 +743,17 @@ def record_decision(
                 event_map[decision],
                 actor=actor,
                 actor_type="client",
+            )
+        else:
+            from .negotiation import apply_followup_review_decision
+
+            negotiation_result = apply_followup_review_decision(
+                req,
+                db,
+                decision=decision,
+                comment=clean_comment,
+                actor=actor,
+                current_version=current,
             )
 
         req.status = status_map[decision]
@@ -777,6 +799,8 @@ def record_decision(
                 metadata=_activity_metadata(req, current, actor_type="client"),
             )
         _commit(db, req, contract)
+        if negotiation_result is not None:
+            req._negotiation_result = negotiation_result
         return req
     except Exception:
         db.rollback()

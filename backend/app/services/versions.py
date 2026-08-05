@@ -185,6 +185,64 @@ def create_initial_version(contract: Contract, db: Session, *, actor: str = "sys
     return v
 
 
+def stage_negotiation_snapshot(
+    contract: Contract,
+    current: ContractVersion,
+    db: Session,
+    *,
+    actor: str,
+    negotiation_id,
+    change_summary: str,
+) -> ContractVersion:
+    """Stage a metadata-backed negotiation revision without committing."""
+    current.is_current = False
+    version = ContractVersion(
+        id=uuid.uuid4(),
+        contract_id=contract.id,
+        version_number=_next_version_number(contract.id, db),
+        version_label=None,
+        parent_version_id=current.id,
+        source="negotiation_counter",
+        status="ready",
+        change_summary=change_summary,
+        file_path=current.file_path or contract.file_url,
+        extracted_json=current.extracted_json,
+        ai_summary=current.ai_summary,
+        created_by=actor,
+        negotiation_id=negotiation_id,
+        hash_sha256=current.hash_sha256,
+        is_current=True,
+    )
+    version.version_label = f"v{version.version_number}"
+    db.add(version)
+    log_version_activity(
+        db,
+        contract.id,
+        "version_created",
+        actor=actor,
+        metadata={
+            "version_id": str(version.id),
+            "version_number": version.version_number,
+            "source": version.source,
+            "negotiation_id": str(negotiation_id),
+        },
+    )
+    log_version_activity(
+        db,
+        contract.id,
+        "current_version_changed",
+        actor=actor,
+        metadata={
+            "from_version_id": str(current.id),
+            "to_version_id": str(version.id),
+            "from": current.version_number,
+            "to": version.version_number,
+            "negotiation_id": str(negotiation_id),
+        },
+    )
+    return version
+
+
 def create_new_version(
     contract_id,
     db: Session,
@@ -198,7 +256,10 @@ def create_new_version(
     make_current: bool = True,
     version_status: str | None = None,
     run_pipeline: bool = True,
+    commit: bool = True,
 ) -> ContractVersion:
+    if not commit and run_pipeline:
+        raise ValueError("pipeline_requires_committed_version")
     if source not in ALLOWED_SOURCES:
         raise ValueError("invalid_source")
     contract = db.get(Contract, contract_id)
@@ -232,14 +293,18 @@ def create_new_version(
     if make_current:
         contract.file_url = key
         contract.status = "processing"
-    db.commit()
-    db.refresh(v)
+    db.flush()
 
-    if run_pipeline and make_current:
-        from ..ai.pipeline import run_extraction
+    if make_current and parent and parent.id != v.id:
+        from .negotiation import supersede_version_negotiations
 
-        run_extraction(contract_id, db)
-        sync_version_snapshot(contract_id, db)
+        supersede_version_negotiations(
+            contract,
+            parent.id,
+            v.id,
+            db,
+            actor=actor,
+        )
 
     log_version_activity(
         db,
@@ -256,7 +321,19 @@ def create_new_version(
             actor=actor,
             metadata={"version_number": num, "source": source},
         )
-    db.refresh(v)
+
+    # The version row and its creation events commit together, before the
+    # pipeline runs, so a later extraction failure cannot lose the audit trail.
+    if commit:
+        db.commit()
+        db.refresh(v)
+
+    if run_pipeline and make_current:
+        from ..ai.pipeline import run_extraction
+
+        run_extraction(contract_id, db)
+        sync_version_snapshot(contract_id, db)
+        db.refresh(v)
     return v
 
 
@@ -273,10 +350,17 @@ def set_current(version_id, db: Session, *, actor: str = "demo") -> ContractVers
     v.is_current = True
     if v.file_path:
         contract.file_url = v.file_path
-    db.commit()
-    db.refresh(v)
     log_version_activity(db, v.contract_id, "version_set_current", actor=actor, metadata={"version_number": v.version_number})
     if prior and prior.id != v.id:
+        from .negotiation import supersede_version_negotiations
+
+        supersede_version_negotiations(
+            contract,
+            prior.id,
+            v.id,
+            db,
+            actor=actor,
+        )
         log_version_activity(
             db,
             v.contract_id,
@@ -291,6 +375,8 @@ def set_current(version_id, db: Session, *, actor: str = "demo") -> ContractVers
             actor=actor,
             metadata={"from": prior_num, "to": v.version_number},
         )
+    db.commit()
+    db.refresh(v)
     return v
 
 
@@ -587,7 +673,7 @@ def stamp_version_id(entity, contract_id, db: Session) -> None:
         entity.version_id = cur.id
 
 
-def mark_version_approved(contract_id, workflow_id, db: Session) -> None:
+def mark_version_approved(contract_id, workflow_id, db: Session, *, commit: bool = True) -> None:
     w = db.get(ApprovalWorkflow, workflow_id)
     v = current_version(contract_id, db)
     if v:
@@ -595,7 +681,8 @@ def mark_version_approved(contract_id, workflow_id, db: Session) -> None:
         v.approval_workflow_id = workflow_id
         if w:
             w.version_id = v.id
-        db.commit()
+        if commit:
+            db.commit()
         log_version_activity(
             db,
             contract_id,

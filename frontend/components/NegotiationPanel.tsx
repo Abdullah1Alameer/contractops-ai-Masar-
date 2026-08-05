@@ -10,7 +10,9 @@ import EmptyState from "@/components/ui/EmptyState";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/feedback/ToastProvider";
 import {
+  abandonNegotiation,
   analyzeNegotiation,
+  apiErrorCode,
   fetchNegotiations,
   patchNegotiation,
   sendNegotiationUpdated,
@@ -60,11 +62,13 @@ function NegotiationResult({
   lang,
   onUpdated,
   onRestart,
+  onLifecycleChanged,
 }: {
   row: NegotiationRow;
   lang: "ar" | "en";
   onUpdated: () => void;
   onRestart?: () => void;
+  onLifecycleChanged?: () => void;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -85,8 +89,8 @@ function NegotiationResult({
     try {
       await patchNegotiation(row.id, patch as any);
       onUpdated();
-    } catch {
-      toast.error(t("common.error"));
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
     } finally {
       setBusy(false);
     }
@@ -115,8 +119,24 @@ function NegotiationResult({
       toast.success(t("negotiation.sent"));
       await navigator.clipboard.writeText(res.review_link);
       onUpdated();
-    } catch {
-      toast.error(t("common.error"));
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const abandon = async () => {
+    const reason = window.prompt(t("negotiation.abandonPrompt"))?.trim();
+    if (!reason) return;
+    setBusy(true);
+    try {
+      await abandonNegotiation(row.id, reason);
+      toast.success(t("negotiation.abandoned"));
+      onUpdated();
+      onLifecycleChanged?.();
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
     } finally {
       setBusy(false);
     }
@@ -168,6 +188,7 @@ function NegotiationResult({
             className="mb-2 w-full rounded-lg border bg-white p-2 text-sm"
             rows={3}
             value={finalEn}
+            disabled={!row.actionable || row.is_stale}
             onChange={(e) => setFinalEn(e.target.value)}
             onBlur={saveFinal}
           />
@@ -176,6 +197,7 @@ function NegotiationResult({
             rows={3}
             dir="rtl"
             value={finalAr}
+            disabled={!row.actionable || row.is_stale}
             onChange={(e) => setFinalAr(e.target.value)}
             onBlur={saveFinal}
           />
@@ -239,13 +261,16 @@ function NegotiationResult({
           </CardBody>
         </Card>
       )}
-      {row.workflow_status !== "sent_to_client" && row.status !== "sent" && (
+      {row.actionable !== false && !row.is_stale && row.workflow_status !== "sent_to_client" && row.status !== "sent" && (
         <div className="flex flex-wrap gap-2">
           <Button variant="primary" size="sm" loading={busy} onClick={() => save({ status: "approved" })}>
             {t("negotiation.approve")}
           </Button>
           <Button variant="primary" size="sm" loading={busy} onClick={send}>
             {t("negotiation.send")}
+          </Button>
+          <Button variant="danger" size="sm" loading={busy} onClick={abandon}>
+            {t("negotiation.abandon")}
           </Button>
         </div>
       )}
@@ -256,9 +281,11 @@ function NegotiationResult({
 export default function NegotiationPanel({
   contractId,
   highlightId,
+  onLifecycleChanged,
 }: {
   contractId: string;
   highlightId?: string | null;
+  onLifecycleChanged?: () => void;
 }) {
   const { t, lang } = useI18n();
   const toast = useToast();
@@ -282,8 +309,8 @@ export default function NegotiationPanel({
     try {
       await analyzeNegotiation(c.review_id, c.comment_id);
       load();
-    } catch {
-      toast.error(t("common.error"));
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
     } finally {
       setAnalyzingKey(null);
     }
@@ -337,6 +364,7 @@ export default function NegotiationPanel({
                   row={neg}
                   lang={lang}
                   onUpdated={load}
+                  onLifecycleChanged={onLifecycleChanged}
                   onRestart={
                     neg.is_stale && c.review_id
                       ? () => analyze(c)

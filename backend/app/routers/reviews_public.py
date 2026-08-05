@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..services.lifecycle import LifecycleError
+from ..services.negotiation import NegotiationError
 from ..services.reviews import (
     ReviewError,
     add_comment,
@@ -39,14 +40,14 @@ def _load(token: str, db: Session):
 
 
 def _review_http_error(error: Exception):
-    if isinstance(error, (ReviewError, LifecycleError)):
+    if isinstance(error, (ReviewError, LifecycleError, NegotiationError)):
         raise HTTPException(error.status_code, detail=error.payload)
     raise error
 
 
 def _decision_result(req, db: Session) -> dict:
     serialized = serialize_review_request(req, db)
-    return {
+    result = {
         "status": serialized["status"],
         "contract_stage": serialized["contract_stage"],
         "actionable": serialized["actionable"],
@@ -54,6 +55,10 @@ def _decision_result(req, db: Session) -> dict:
         "terminal_decision": serialized["terminal_decision"],
         "next_allowed_actions": serialized["next_allowed_actions"],
     }
+    negotiation_result = getattr(req, "_negotiation_result", None)
+    if negotiation_result is not None:
+        result["negotiation"] = negotiation_result
+    return result
 
 
 @router.get("/review/{token}")
@@ -61,7 +66,7 @@ def get_review(token: str, db: Session = Depends(get_db)):
     req = _load(token, db)
     try:
         return build_public_payload(req, db)
-    except (ReviewError, LifecycleError) as error:
+    except (ReviewError, LifecycleError, NegotiationError) as error:
         _review_http_error(error)
 
 
@@ -70,7 +75,7 @@ def approve_review(token: str, db: Session = Depends(get_db)):
     req = _load(token, db)
     try:
         record_decision(req, db, "approve", actor="client")
-    except (ReviewError, LifecycleError) as error:
+    except (ReviewError, LifecycleError, NegotiationError) as error:
         _review_http_error(error)
     return _decision_result(req, db)
 
@@ -80,7 +85,7 @@ def reject_review(token: str, body: RejectBody, db: Session = Depends(get_db)):
     req = _load(token, db)
     try:
         record_decision(req, db, "reject", body.reason, actor="client")
-    except (ReviewError, LifecycleError) as error:
+    except (ReviewError, LifecycleError, NegotiationError) as error:
         _review_http_error(error)
     return _decision_result(req, db)
 
@@ -90,7 +95,7 @@ def request_changes(token: str, body: RequestChangesBody, db: Session = Depends(
     req = _load(token, db)
     try:
         record_decision(req, db, "changes_requested", body.general_comment, actor="client")
-    except (ReviewError, LifecycleError) as error:
+    except (ReviewError, LifecycleError, NegotiationError) as error:
         _review_http_error(error)
     return _decision_result(req, db)
 
@@ -100,7 +105,7 @@ def post_comment(token: str, body: CommentBody, db: Session = Depends(get_db)):
     req = _load(token, db)
     try:
         cm = add_comment(req, db, body.comment, body.clause_ref, body.page)
-    except (ReviewError, LifecycleError) as error:
+    except (ReviewError, LifecycleError, NegotiationError) as error:
         _review_http_error(error)
     return {
         "id": str(cm.id),

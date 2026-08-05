@@ -15,7 +15,9 @@ import SectionHeader from "@/components/ui/SectionHeader";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import StageBadge from "@/components/ui/StageBadge";
 import { TabList, TabPanel, TabTrigger, Tabs } from "@/components/ui/Tabs";
+import { useToast } from "@/components/feedback/ToastProvider";
 import {
+  apiErrorCode,
   compareVersions,
   downloadVersionBlob,
   fetchActivity,
@@ -210,6 +212,7 @@ function FieldRow({ name, value, className, note }: { name: string; value: unkno
 export default function VersionsPanel({ contractId }: { contractId: string }) {
   const { t } = useI18n();
   const { confirm } = useConfirm();
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ContractVersionRow[]>([]);
   const [activity, setActivity] = useState<ActivityEventRow[]>([]);
@@ -429,8 +432,12 @@ export default function VersionsPanel({ contractId }: { contractId: string }) {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onSubmit={async (file, source, summary) => {
-          await uploadNewVersion(contractId, file, source, summary);
-          setCreateOpen(false);
+          try {
+            await uploadNewVersion(contractId, file, source, summary);
+            setCreateOpen(false);
+          } catch (error) {
+            toast.error(apiErrorCode(error, t("common.error")));
+          }
           load();
         }}
       />

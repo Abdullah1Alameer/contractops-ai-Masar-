@@ -56,7 +56,8 @@ export default function SignaturePanel({
 
   const req = bundle?.request;
   const canCreate =
-    (bundle?.can_create ?? contractStage === "approved") && !req?.status?.match(/partially_signed|completed/);
+    (bundle?.can_create ?? (contractStage === "approved" || contractStage === "ready_to_sign")) &&
+    !req?.status?.match(/partially_signed|completed/);
 
   const create = async (body: Parameters<typeof createSignatureRequest>[1]) => {
     setBusy(true);

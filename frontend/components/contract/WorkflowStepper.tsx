@@ -7,7 +7,7 @@ const STEPS = [
   { id: "review", key: "stepper.review", stages: ["client_review", "awaiting_client"] },
   { id: "negotiation", key: "stepper.negotiation", stages: ["negotiation"] },
   { id: "approval", key: "stepper.approval", stages: ["internal_review"] },
-  { id: "signature", key: "stepper.signature", stages: ["awaiting_signature", "partially_signed", "approved"] },
+  { id: "signature", key: "stepper.signature", stages: ["ready_to_sign", "awaiting_signature", "partially_signed", "approved"] },
   { id: "completed", key: "stepper.completed", stages: ["active", "signed", "completed"] },
 ] as const;
 

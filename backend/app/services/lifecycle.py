@@ -65,14 +65,19 @@ class LifecycleEvent(str, Enum):
     REVIEW_CANCELLED = "review_cancelled"
 
     NEGOTIATION_STARTED = "negotiation_started"
+    NEGOTIATION_ANALYSIS_REQUESTED = "negotiation_analysis_requested"
     NEGOTIATION_ANALYSIS_STARTED = "negotiation_analysis_started"
+    NEGOTIATION_ANALYSIS_FAILED = "negotiation_analysis_failed"
     NEGOTIATION_ANALYZED = "negotiation_analyzed"
     NEGOTIATION_EDITED = "negotiation_edited"
     COUNTERPROPOSAL_SENT = "counterproposal_sent"
+    NEGOTIATION_CLIENT_RESPONDED = "negotiation_client_responded"
     NEGOTIATION_ROUND_STARTED = "negotiation_round_started"
     NEGOTIATION_ACCEPTED = "negotiation_accepted"
+    NEGOTIATION_CLOSED = "negotiation_closed"
     NEGOTIATION_REJECTED = "negotiation_rejected"
     NEGOTIATION_ABANDONED = "negotiation_abandoned"
+    NEGOTIATION_SUPERSEDED = "negotiation_superseded"
 
     APPROVAL_STARTED = "approval_started"
     APPROVAL_STEP_APPROVED = "approval_step_approved"
@@ -380,7 +385,17 @@ _TRANSITION_RULES = (
     ),
     _rule(
         ContractStage.NEGOTIATION,
+        LifecycleEvent.NEGOTIATION_ANALYSIS_REQUESTED,
+        ContractStage.NEGOTIATION,
+    ),
+    _rule(
+        ContractStage.NEGOTIATION,
         LifecycleEvent.NEGOTIATION_ANALYSIS_STARTED,
+        ContractStage.NEGOTIATION,
+    ),
+    _rule(
+        ContractStage.NEGOTIATION,
+        LifecycleEvent.NEGOTIATION_ANALYSIS_FAILED,
         ContractStage.NEGOTIATION,
     ),
     _rule(
@@ -400,7 +415,22 @@ _TRANSITION_RULES = (
     ),
     _rule(
         ContractStage.NEGOTIATION,
+        LifecycleEvent.NEGOTIATION_CLIENT_RESPONDED,
+        ContractStage.NEGOTIATION,
+    ),
+    _rule(
+        ContractStage.NEGOTIATION,
         LifecycleEvent.NEGOTIATION_ROUND_STARTED,
+        ContractStage.NEGOTIATION,
+    ),
+    _rule(
+        ContractStage.NEGOTIATION,
+        LifecycleEvent.NEGOTIATION_CLOSED,
+        ContractStage.NEGOTIATION,
+    ),
+    _rule(
+        ContractStage.NEGOTIATION,
+        LifecycleEvent.NEGOTIATION_SUPERSEDED,
         ContractStage.NEGOTIATION,
     ),
     _rule(
@@ -730,6 +760,9 @@ APPROVAL_START_STAGES = frozenset(
     {ContractStage.NEGOTIATION.value, ContractStage.INTERNAL_REVIEW.value}
 )
 SIGNATURE_CREATE_STAGE = LegacyContractStage.APPROVED.value
+SIGNATURE_CREATE_STAGES = frozenset(
+    {LegacyContractStage.APPROVED.value, ContractStage.READY_TO_SIGN.value}
+)
 DECLINE_REVERT_STAGE = ContractStage.NEGOTIATION.value
 
 
@@ -761,7 +794,7 @@ def can_start_approval(contract: Contract | None) -> bool:
 def can_create_signature(contract: Contract | None) -> bool:
     if contract is None:
         return False
-    return (contract.stage or ContractStage.NEGOTIATION.value) == SIGNATURE_CREATE_STAGE
+    return (contract.stage or ContractStage.NEGOTIATION.value) in SIGNATURE_CREATE_STAGES
 
 
 def transition_stage(contract: Contract, stage: str, db: Session) -> Contract:

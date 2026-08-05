@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from hashlib import sha256
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +20,8 @@ from ...models import (
     LegalPlaybook,
 )
 from ...services import versions as ver_svc
+from ...services.lifecycle import ContractStage, normalize_stage
+from ...services.negotiation import NegotiationError
 from ...services.storage import storage
 from .classification import classify_email
 from .demo_seed import ensure_demo_data
@@ -34,8 +37,39 @@ def _iso(dt) -> str | None:
     return dt.isoformat() if dt else None
 
 
+def _validate_thread_current(
+    thread: NegotiationThread,
+    db: Session,
+) -> tuple[Contract, object]:
+    contract = db.get(Contract, thread.contract_id)
+    current = ver_svc.current_version(thread.contract_id, db)
+    if (
+        contract is None
+        or current is None
+        or thread.current_version_id is None
+        or thread.current_version_id != current.id
+    ):
+        raise NegotiationError(409, "workflow_stale")
+    if normalize_stage(contract.stage) != ContractStage.NEGOTIATION:
+        raise NegotiationError(
+            409,
+            "invalid_stage_transition",
+            current_stage=contract.stage,
+        )
+    return contract, current
+
+
 def serialize_thread(t: NegotiationThread, db: Session) -> dict[str, Any]:
     contract = db.get(Contract, t.contract_id)
+    current = ver_svc.current_version(t.contract_id, db)
+    provider = get_email_connector().name
+    stale = current is None or t.current_version_id != current.id
+    actionable = bool(
+        contract
+        and not stale
+        and normalize_stage(contract.stage) == ContractStage.NEGOTIATION
+        and t.status not in {"agreement_reached", "rejected", "cancelled", "closed"}
+    )
     latest_pkg = (
         db.query(NegotiationReviewPackage)
         .filter_by(thread_id=t.id)
@@ -62,6 +96,16 @@ def serialize_thread(t: NegotiationThread, db: Session) -> dict[str, Any]:
         "playbook_id": str(t.playbook_id) if t.playbook_id else None,
         "base_version_id": str(t.base_version_id) if t.base_version_id else None,
         "current_version_id": str(t.current_version_id) if t.current_version_id else None,
+        "contract_stage": contract.stage if contract else None,
+        "is_stale": stale,
+        "actionable": actionable,
+        "provider": provider,
+        "simulated": provider == "simulated",
+        "next_allowed_actions": (
+            ["import", "analyze", "approve_response", "send_response", "record_response"]
+            if actionable
+            else []
+        ),
         "created_at": _iso(t.created_at),
     }
 
@@ -175,6 +219,14 @@ def create_thread(db: Session, payload: dict, *, actor: str = "demo") -> dict:
     if contract is None:
         raise ValueError("contract_not_found")
     cur = ver_svc.current_version(contract.id, db)
+    if cur is None:
+        raise NegotiationError(409, "workflow_stale")
+    if normalize_stage(contract.stage) != ContractStage.NEGOTIATION:
+        raise NegotiationError(
+            409,
+            "invalid_stage_transition",
+            current_stage=contract.stage,
+        )
     t = NegotiationThread(
         id=uuid.uuid4(),
         contract_id=contract.id,
@@ -194,9 +246,10 @@ def create_thread(db: Session, payload: dict, *, actor: str = "demo") -> dict:
         created_by=actor,
     )
     db.add(t)
+    db.flush()
+    log_monitor_event(db, contract.id, "negotiation_thread_started", actor=actor, thread_id=t.id)
     db.commit()
     db.refresh(t)
-    log_monitor_event(db, contract.id, "negotiation_thread_started", actor=actor, thread_id=t.id)
     return serialize_thread(t, db)
 
 
@@ -204,6 +257,15 @@ def patch_thread(thread_id, db: Session, payload: dict) -> dict:
     t = db.get(NegotiationThread, thread_id)
     if t is None:
         raise ValueError("not_found")
+    if "status" in payload and payload["status"] not in {
+        "draft",
+        "monitoring",
+        "lawyer_review",
+        "response_ready",
+        "awaiting_counterparty",
+        "counterparty_responded",
+    }:
+        raise NegotiationError(409, "invalid_stage_transition")
     for key in ("status", "assigned_lawyer", "monitoring_enabled", "subject", "counterparty_name"):
         if key in payload:
             setattr(t, key, payload[key])
@@ -219,9 +281,29 @@ def import_email_to_thread(
     payload: dict,
     actor: str = "demo",
 ) -> dict:
+    try:
+        return _import_email_to_thread(
+            thread_id,
+            db,
+            payload=payload,
+            actor=actor,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _import_email_to_thread(
+    thread_id,
+    db: Session,
+    *,
+    payload: dict,
+    actor: str = "demo",
+) -> dict:
     t = db.get(NegotiationThread, thread_id)
     if t is None:
         raise ValueError("not_found")
+    _validate_thread_current(t, db)
 
     connector = get_email_connector()
     msg_dto = None
@@ -229,11 +311,46 @@ def import_email_to_thread(
         msg_dto = connector.get_message(payload["simulated_message_id"])
     elif payload.get("manual"):
         manual = payload["manual"]
+        provider = payload.get("provider") or "manual"
+        external_message_id = manual.get("external_message_id")
+        if not external_message_id:
+            dedupe_material = "\0".join(
+                [
+                    str(manual.get("sender_email") or ""),
+                    str(manual.get("subject") or ""),
+                    str(manual.get("body_text") or ""),
+                ]
+            )
+            external_message_id = f"manual-{sha256(dedupe_material.encode('utf-8')).hexdigest()}"
+        existing = (
+            db.query(NegotiationEmail)
+            .filter_by(
+                provider=provider,
+                external_message_id=external_message_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            if existing.thread_id != t.id:
+                raise ValueError("version_conflict")
+            existing_round = (
+                db.query(NegotiationRound)
+                .filter_by(thread_id=t.id, inbound_email_id=existing.id)
+                .order_by(NegotiationRound.round_number.desc())
+                .first()
+            )
+            return {
+                "email": serialize_email(existing),
+                "round_id": str(existing_round.id) if existing_round else None,
+                "match": {"confidence": float(existing.match_confidence or 1)},
+                "deduplicated": True,
+            }
         msg_dto = None
         email = NegotiationEmail(
             id=uuid.uuid4(),
             thread_id=t.id,
-            provider=payload.get("provider") or "manual",
+            external_message_id=external_message_id,
+            provider=provider,
             direction="inbound",
             sender_name=manual.get("sender_name"),
             sender_email=manual.get("sender_email") or t.counterparty_email,
@@ -244,12 +361,35 @@ def import_email_to_thread(
             processing_status="received",
         )
         db.add(email)
-        db.commit()
-        db.refresh(email)
+        db.flush()
         return _process_inbound_email(db, t, email, manual.get("attachments") or [], actor=actor)
 
     if msg_dto is None:
         raise ValueError("message_not_found")
+
+    existing = (
+        db.query(NegotiationEmail)
+        .filter_by(
+            provider=connector.name,
+            external_message_id=msg_dto.external_message_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        if existing.thread_id != t.id:
+            raise ValueError("version_conflict")
+        existing_round = (
+            db.query(NegotiationRound)
+            .filter_by(thread_id=t.id, inbound_email_id=existing.id)
+            .order_by(NegotiationRound.round_number.desc())
+            .first()
+        )
+        return {
+            "email": serialize_email(existing),
+            "round_id": str(existing_round.id) if existing_round else None,
+            "match": {"confidence": float(existing.match_confidence or 1)},
+            "deduplicated": True,
+        }
 
     email = NegotiationEmail(
         id=uuid.uuid4(),
@@ -270,8 +410,7 @@ def import_email_to_thread(
         processing_status="received",
     )
     db.add(email)
-    db.commit()
-    db.refresh(email)
+    db.flush()
 
     att_payloads = []
     for att in msg_dto.attachments:
@@ -329,7 +468,7 @@ def _process_inbound_email(db: Session, t: NegotiationThread, email: Negotiation
     email.requires_response = bool(cls.get("requires_response"))
     email.processing_status = "needs_review" if cls.get("needs_review") else "parsing"
     t.last_message_at = email.received_at or datetime.now(timezone.utc)
-    db.commit()
+    db.flush()
 
     log_monitor_event(
         db,
@@ -385,13 +524,19 @@ def _process_inbound_email(db: Session, t: NegotiationThread, email: Negotiation
         email_id=email.id,
     )
     db.commit()
-    return {"email": serialize_email(email), "round_id": str(rnd.id), "match": {"confidence": match.confidence}}
+    return {
+        "email": serialize_email(email),
+        "round_id": str(rnd.id),
+        "match": {"confidence": match.confidence},
+        "deduplicated": False,
+    }
 
 
 def analyze_thread(thread_id, db: Session, *, email_id: uuid.UUID | None = None, actor: str = "demo") -> dict:
     t = db.get(NegotiationThread, thread_id)
     if t is None:
         raise ValueError("not_found")
+    _validate_thread_current(t, db)
     email = None
     if email_id:
         email = db.get(NegotiationEmail, email_id)
@@ -417,8 +562,38 @@ def analyze_thread(thread_id, db: Session, *, email_id: uuid.UUID | None = None,
         rnd.review_package_id = pkg.id
         rnd.proposed_version_id = email.linked_version_id
         rnd.status = "lawyer_review"
-        db.commit()
+    db.commit()
+    db.refresh(pkg)
     return serialize_package(pkg)
+
+
+def record_thread_response(
+    thread_id,
+    db: Session,
+    *,
+    decision: str,
+    actor: str,
+    reason: str | None = None,
+) -> dict:
+    from ..negotiation import apply_monitor_response
+
+    thread = db.get(NegotiationThread, thread_id)
+    if thread is None:
+        raise ValueError("negotiation_not_found")
+    try:
+        result = apply_monitor_response(
+            thread,
+            db,
+            decision=decision,
+            actor=actor,
+            reason=reason,
+        )
+        db.commit()
+        db.refresh(thread)
+        return {**result, "thread": serialize_thread(thread, db)}
+    except Exception:
+        db.rollback()
+        raise
 
 
 def link_email_contract(email_id, db: Session, *, thread_id: uuid.UUID) -> dict:
@@ -448,7 +623,7 @@ def create_version_from_attachment(email_id, attachment_id, db: Session, *, acto
     kind, ver = create_proposed_version_from_attachment(db, contract=contract, attachment=att, file_bytes=content, actor=actor)
     if ver:
         email.linked_version_id = ver.id
-        db.commit()
+    db.commit()
     return {"kind": kind, "version_id": str(ver.id) if ver else None}
 
 

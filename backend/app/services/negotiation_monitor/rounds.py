@@ -27,6 +27,15 @@ def open_round(
     base_version_id: uuid.UUID | None,
     proposed_version_id: uuid.UUID | None = None,
 ) -> NegotiationRound:
+    if inbound_email_id is not None:
+        existing = (
+            db.query(NegotiationRound)
+            .filter_by(thread_id=thread.id, inbound_email_id=inbound_email_id)
+            .with_for_update()
+            .first()
+        )
+        if existing is not None:
+            return existing
     r = NegotiationRound(
         id=uuid.uuid4(),
         thread_id=thread.id,
@@ -39,17 +48,14 @@ def open_round(
     )
     db.add(r)
     thread.status = "counterparty_responded"
-    db.commit()
-    db.refresh(r)
+    db.flush()
     return r
 
 
 def set_round_status(round_row: NegotiationRound, status: str, db: Session) -> None:
     round_row.status = status
-    db.commit()
 
 
 def close_round(round_row: NegotiationRound, db: Session, *, status: str = "sent") -> None:
     round_row.status = status
     round_row.closed_at = _utcnow()
-    db.commit()

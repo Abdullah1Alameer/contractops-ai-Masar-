@@ -53,4 +53,3 @@ def log_monitor_event(
     if extra:
         meta.update(extra)
     log_activity(db, contract_id, event_type, actor=actor, metadata=meta)
-    db.commit()

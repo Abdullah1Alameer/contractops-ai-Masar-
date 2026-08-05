@@ -11,7 +11,7 @@ from ...integrations.email.base import OutboundEmailRequest
 from ...models import NegotiationEmail, NegotiationReviewPackage, NegotiationThread
 from ...services import approvals as appr_svc
 from .lineage_events import log_monitor_event
-from .rounds import close_round, open_round
+from .rounds import close_round
 
 
 def _required_approvers_from_package(pkg: NegotiationReviewPackage) -> set[str]:
@@ -63,8 +63,6 @@ def approve_response(
     thread = db.get(NegotiationThread, pkg.thread_id)
     if thread:
         thread.status = "response_ready"
-    db.commit()
-    db.refresh(pkg)
     if thread:
         log_monitor_event(
             db,
@@ -74,6 +72,8 @@ def approve_response(
             thread_id=thread.id,
             email_id=pkg.email_id,
         )
+    db.commit()
+    db.refresh(pkg)
     return pkg
 
 
@@ -84,7 +84,16 @@ def send_approved_response(
     actor: str,
     override_reason: str | None = None,
 ) -> NegotiationEmail:
-    if pkg.status not in ("approved", "edited", "ready"):
+    if pkg.status == "response_sent":
+        existing = (
+            db.query(NegotiationEmail)
+            .filter_by(thread_id=pkg.thread_id, direction="outbound")
+            .order_by(NegotiationEmail.sent_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
+    if pkg.status != "approved":
         raise ValueError("package_not_approved")
 
     thread = db.get(NegotiationThread, pkg.thread_id)
@@ -94,7 +103,6 @@ def send_approved_response(
     roles = _required_approvers_from_package(pkg)
     if override_reason:
         pkg.lawyer_edited_json = {**(pkg.lawyer_edited_json or {}), "approval_override": {"reason": override_reason}}
-        db.commit()
         roles = set()
     ok, err = _finance_or_executive_approved(db, thread.contract_id, roles)
     if not ok:
@@ -140,8 +148,7 @@ def send_approved_response(
     pkg.status = "response_sent"
     thread.status = "awaiting_counterparty"
     thread.last_message_at = outbound.sent_at
-    db.commit()
-    db.refresh(outbound)
+    db.flush()
 
     from ...models import NegotiationRound
 
@@ -171,5 +178,6 @@ def send_approved_response(
             thread_id=thread.id,
             round_id=rnd.id,
         )
-    open_round(db, thread=thread, inbound_email_id=None, base_version_id=thread.current_version_id)
+    db.commit()
+    db.refresh(outbound)
     return outbound

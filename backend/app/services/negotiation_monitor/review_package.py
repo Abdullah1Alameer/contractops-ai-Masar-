@@ -157,8 +157,7 @@ def generate_review_package(
     thread.status = "lawyer_review"
     thread.last_analyzed_at = datetime.now(timezone.utc)
     email.processing_status = "analyzed"
-    db.commit()
-    db.refresh(pkg)
+    db.flush()
 
     from .lineage_events import log_monitor_event
 

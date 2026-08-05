@@ -1,0 +1,641 @@
+{
+  "summary": {
+    "base_url": "http://127.0.0.1:8099",
+    "checks_total": 68,
+    "checks_passed": 68,
+    "checks_failed": 0,
+    "cleanup": {
+      "deleted": 8,
+      "remaining_qa_contracts": 0,
+      "residue": {
+        "approval_workflows": 0,
+        "approval_steps": 0,
+        "activity_events": 0,
+        "negotiations": 0
+      }
+    },
+    "error": null
+  },
+  "checks": [
+    {
+      "name": "start returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+    },
+    {
+      "name": "start keeps internal_review",
+      "pass": true,
+      "detail": "internal_review"
+    },
+    {
+      "name": "start requires business_owner first",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "start locks all but first step",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "pending"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "locked"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "locked"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "business_owner approval returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":2,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+    },
+    {
+      "name": "stage stays internal_review after business_owner",
+      "pass": true,
+      "detail": "internal_review"
+    },
+    {
+      "name": "only next step unlocked after business_owner",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "approved"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "pending"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "locked"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "legal approval returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":3,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+    },
+    {
+      "name": "stage stays internal_review after legal",
+      "pass": true,
+      "detail": "internal_review"
+    },
+    {
+      "name": "only next step unlocked after legal",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "approved"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "approved"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "pending"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "finance approval returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"in_progress\",\"current_step_order\":4,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3"
+    },
+    {
+      "name": "stage stays internal_review after finance",
+      "pass": true,
+      "detail": "internal_review"
+    },
+    {
+      "name": "only next step unlocked after finance",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "approved"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "approved"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "approved"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "name": "executive approval returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"f69c4182-a53f-480e-bd41-675dd137f46c\",\"contract_id\":\"7b87d3fa-d92f-4e3b-96a2-bb4d4a70a4f5\",\"status\":\"approved\",\"current_step_order\":4,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:19.3928"
+    },
+    {
+      "name": "final approval sets ready_to_sign",
+      "pass": true,
+      "detail": "ready_to_sign"
+    },
+    {
+      "name": "workflow approved",
+      "pass": true,
+      "detail": "approved"
+    },
+    {
+      "name": "current version approved",
+      "pass": true,
+      "detail": "approved"
+    },
+    {
+      "name": "all steps approved",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "approved"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "approved"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "approved"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "approved"
+        }
+      ]
+    },
+    {
+      "name": "no negotiation seed on approval",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "name": "event approval_workflow_started persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "approval_step_approved",
+        "approval_step_approved",
+        "approval_step_approved",
+        "contract_ready_to_sign",
+        "approval_workflow_completed",
+        "version_approved",
+        "approval_step_approved"
+      ]
+    },
+    {
+      "name": "event approval_workflow_completed persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "approval_step_approved",
+        "approval_step_approved",
+        "approval_step_approved",
+        "contract_ready_to_sign",
+        "approval_workflow_completed",
+        "version_approved",
+        "approval_step_approved"
+      ]
+    },
+    {
+      "name": "event contract_ready_to_sign persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "approval_step_approved",
+        "approval_step_approved",
+        "approval_step_approved",
+        "contract_ready_to_sign",
+        "approval_workflow_completed",
+        "version_approved",
+        "approval_step_approved"
+      ]
+    },
+    {
+      "name": "API read-back is canonical",
+      "pass": true,
+      "detail": "ready_to_sign"
+    },
+    {
+      "name": "wrong role denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_role_required\",\"required_role\":\"business_owner\"}}"
+    },
+    {
+      "name": "out of order denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_out_of_order\",\"current_step_order\":1}}"
+    },
+    {
+      "name": "duplicate start denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_already_active\"}}"
+    },
+    {
+      "name": "guards left workflow untouched",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "pending"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "locked"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "locked"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "guards created no extra workflow",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "name": "change request without reason denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_reason_required\"}}"
+    },
+    {
+      "name": "change request returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"a03551c0-5970-4e12-a309-aeec414b1dc8\",\"contract_id\":\"c848964e-6e32-4ef2-8d1e-dc53a3d50381\",\"status\":\"changes_requested\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:5"
+    },
+    {
+      "name": "stage moves to negotiation",
+      "pass": true,
+      "detail": "negotiation"
+    },
+    {
+      "name": "workflow changes_requested",
+      "pass": true,
+      "detail": "changes_requested"
+    },
+    {
+      "name": "exactly one negotiation seed",
+      "pass": true,
+      "detail": 1
+    },
+    {
+      "name": "event approval_changes_requested persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "negotiation_analysis_requested",
+        "contract_entered_negotiation",
+        "approval_changes_requested"
+      ]
+    },
+    {
+      "name": "event contract_entered_negotiation persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "negotiation_analysis_requested",
+        "contract_entered_negotiation",
+        "approval_changes_requested"
+      ]
+    },
+    {
+      "name": "event negotiation_analysis_requested persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "negotiation_analysis_requested",
+        "contract_entered_negotiation",
+        "approval_changes_requested"
+      ]
+    },
+    {
+      "name": "rejection returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"8d9536bf-677d-42a8-8ad5-fcceb1785d60\",\"contract_id\":\"c115cd0b-a993-40e7-b02a-a32d11e041b7\",\"status\":\"rejected\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:46.1427"
+    },
+    {
+      "name": "stage rejected",
+      "pass": true,
+      "detail": "rejected"
+    },
+    {
+      "name": "workflow rejected",
+      "pass": true,
+      "detail": "rejected"
+    },
+    {
+      "name": "rejection creates no negotiation",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "name": "event approval_step_rejected persisted",
+      "pass": true,
+      "detail": [
+        "approval_workflow_started",
+        "version_sent_for_approval",
+        "contract_rejected",
+        "approval_step_rejected",
+        "approval_rejected"
+      ]
+    },
+    {
+      "name": "event approval_rejected persisted",
+      "pass": true,
+      "detail": [
+        "approval_workflow_started",
+        "version_sent_for_approval",
+        "contract_rejected",
+        "approval_step_rejected",
+        "approval_rejected"
+      ]
+    },
+    {
+      "name": "event contract_rejected persisted",
+      "pass": true,
+      "detail": [
+        "approval_workflow_started",
+        "version_sent_for_approval",
+        "contract_rejected",
+        "approval_step_rejected",
+        "approval_rejected"
+      ]
+    },
+    {
+      "name": "duplicate rejection denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_step_closed\",\"workflow_status\":\"rejected\"}}"
+    },
+    {
+      "name": "cancel without reason denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_reason_required\"}}"
+    },
+    {
+      "name": "cancel returns 200",
+      "pass": true,
+      "detail": "{\"id\":\"f3c37490-b7fe-460b-b29f-0cfc8dd005cb\",\"contract_id\":\"5c74a6af-4bf0-4044-ae76-2a4342258250\",\"status\":\"cancelled\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:51.882"
+    },
+    {
+      "name": "cancel keeps internal_review",
+      "pass": true,
+      "detail": "internal_review"
+    },
+    {
+      "name": "workflow cancelled",
+      "pass": true,
+      "detail": "cancelled"
+    },
+    {
+      "name": "cancel locks steps",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "locked"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "locked"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "locked"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "event approval_workflow_cancelled persisted",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "restart allowed after cancel",
+      "pass": true,
+      "detail": "{\"id\":\"9ecabb37-ebc8-4e6d-8943-2ef3470b4aa8\",\"contract_id\":\"5c74a6af-4bf0-4044-ae76-2a4342258250\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:50:55.7"
+    },
+    {
+      "name": "restart created second workflow",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "unresolved negotiation blocks start",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"unresolved_negotiations\",\"unresolved\":[{\"id\":\"c15e1ad6-cf09-4945-b5b7-fc2d38f47cb1\",\"clause_ref\":\"7.1\",\"workflow_status\":\"pending_analysis\"}]}}"
+    },
+    {
+      "name": "blocked start created no workflow",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "legacy force denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_reason_required\"}}"
+    },
+    {
+      "name": "override denied for finance",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_role_required\",\"required_roles\":[\"executive\",\"legal\"]}}"
+    },
+    {
+      "name": "override without reason denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"approval_reason_required\"}}"
+    },
+    {
+      "name": "legal override accepted",
+      "pass": true,
+      "detail": "{\"id\":\"0a62a6c1-2b7d-4a64-9c5f-4fc6a854b099\",\"contract_id\":\"4d26bada-1014-4dd4-8189-d445623d16a0\",\"status\":\"in_progress\",\"current_step_order\":1,\"started_by\":\"legal\",\"started_at\":\"2026-08-05T14:51:02.0"
+    },
+    {
+      "name": "override flagged on workflow",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "override kept every step",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "pending"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "locked"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "locked"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "override_used event persisted",
+      "pass": true,
+      "detail": [
+        "version_sent_for_approval",
+        "approval_workflow_started",
+        "approval_override_used",
+        "negotiation_closed"
+      ]
+    },
+    {
+      "name": "overridden item closed with outcome",
+      "pass": true,
+      "detail": [
+        "closed",
+        "approval_overridden"
+      ]
+    },
+    {
+      "name": "override audit records ids without reason text",
+      "pass": true,
+      "detail": {
+        "role": "legal",
+        "timestamp": "2026-08-05T14:51:02.505395+00:00",
+        "actor_type": "internal",
+        "version_id": "41c226dc-1920-4439-90be-158bab700829",
+        "contract_id": "4d26bada-1014-4dd4-8189-d445623d16a0",
+        "reason_hash": "d69bf8243a5b8934",
+        "workflow_id": "0a62a6c1-2b7d-4a64-9c5f-4fc6a854b099",
+        "entry_evidence": "client_review_approved",
+        "reason_present": true,
+        "version_number": 1,
+        "overridden_rules": [
+          "unresolved_negotiations"
+        ],
+        "overridden_negotiation_ids": [
+          "c15e1ad6-cf09-4945-b5b7-fc2d38f47cb1"
+        ]
+      }
+    },
+    {
+      "name": "stale workflow decision denied",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"workflow_stale\"}}"
+    },
+    {
+      "name": "stale attempt left step pending",
+      "pass": true,
+      "detail": [
+        {
+          "step_order": 1,
+          "role": "business_owner",
+          "status": "pending"
+        },
+        {
+          "step_order": 2,
+          "role": "legal",
+          "status": "locked"
+        },
+        {
+          "step_order": 3,
+          "role": "finance",
+          "status": "locked"
+        },
+        {
+          "step_order": 4,
+          "role": "executive",
+          "status": "locked"
+        }
+      ]
+    },
+    {
+      "name": "stale attempt kept internal_review",
+      "pass": true,
+      "detail": "internal_review"
+    },
+    {
+      "name": "active signature blocks start",
+      "pass": true,
+      "detail": "{\"detail\":{\"error\":\"signature_request_active\"}}"
+    },
+    {
+      "name": "signature block created no workflow",
+      "pass": true,
+      "detail": null
+    }
+  ]
+}

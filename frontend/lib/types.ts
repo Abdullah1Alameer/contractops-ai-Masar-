@@ -504,9 +504,16 @@ export interface NegotiationRow {
   pros: string[];
   cons: string[];
   status: string;
+  editing_status: string;
   edited_by_lawyer: boolean;
   sent_review_request_id: string | null;
   workflow_status: string;
+  closure_outcome:
+    | "agreement_reached"
+    | "counterparty_rejected"
+    | "internally_abandoned"
+    | "superseded"
+    | null;
   lawyer_final_clause: string | null;
   lawyer_final_clause_ar: string | null;
   sent_at: string | null;
@@ -515,7 +522,16 @@ export interface NegotiationRow {
   created_at: string | null;
   updated_at: string | null;
   version_id?: string | null;
+  current_version_id?: string | null;
   is_stale?: boolean;
+  actionable?: boolean;
+  contract_stage?: string | null;
+  current_round?: number;
+  total_rounds?: number;
+  unresolved_count?: number;
+  next_allowed_actions?: string[];
+  analysis_status?: string;
+  human_decision_required?: boolean;
 }
 
 export interface NegotiationCandidate {
@@ -561,9 +577,17 @@ export interface ApprovalWorkflowView {
   steps: ApprovalStepRow[];
   current_step: ApprovalStepRow | null;
   allowed_actions: string[];
+  next_allowed_actions?: string[];
   approved_count: number;
   remaining_count: number;
+  completed_step_count?: number;
+  total_step_count?: number;
+  current_required_role?: string | null;
+  contract_stage?: string | null;
+  actionable?: boolean;
+  stale?: boolean;
   is_stale?: boolean;
+  override_used?: boolean;
   version_id?: string | null;
 }
 
@@ -845,6 +869,12 @@ export interface NegotiationMonitorThread {
   requires_attention: boolean;
   last_message_at: string | null;
   assigned_lawyer: string | null;
+  contract_stage?: string | null;
+  is_stale?: boolean;
+  actionable?: boolean;
+  provider?: string;
+  simulated?: boolean;
+  next_allowed_actions?: string[];
 }
 
 export interface NegotiationReviewPackageRow {

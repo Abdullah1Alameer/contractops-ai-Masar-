@@ -1,0 +1,301 @@
+{
+  "summary": {
+    "base_url": "http://127.0.0.1:8099",
+    "contract_id": "108db666-4bbf-4d5b-8935-0ca4bc731577",
+    "checks_total": 26,
+    "checks_passed": 26,
+    "checks_failed": 0,
+    "cleanup": {
+      "deleted": 204,
+      "remaining": 0,
+      "residue": {
+        "contract_versions": 0,
+        "clauses": 0,
+        "deadlines": 0,
+        "payment_milestones": 0,
+        "activity_events": 0
+      }
+    },
+    "error": null
+  },
+  "checks": [
+    {
+      "name": "upload returns 201",
+      "pass": true,
+      "detail": "{\"id\":\"108db666-4bbf-4d5b-8935-0ca4bc731577\",\"status\":\"processing\"}"
+    },
+    {
+      "name": "initial extraction succeeds",
+      "pass": true,
+      "detail": "{\"status\":\"ready\",\"supported\":true,\"contract_id\":\"108db666-4bbf-4d5b-8935-0ca4bc731577\",\"counts\":{\"clauses\":10,\"obligations\":4,\"notice_periods\":2,\"milestones\":0},\"needs_review\":[{\"field\":\"retention_pct\",\"reason\":\"low_confidence\",\"confidence\":0},{\"field\":\"commencement_date\",\"reason\":\"low_confidence\","
+    },
+    {
+      "name": "v1 exists after upload",
+      "pass": true,
+      "detail": [
+        [
+          1,
+          "initial_upload",
+          "ready",
+          true,
+          "Initial upload",
+          "bbf51a0b075840e7bbbcd72b04f38ffc_qa-version-smoke.docx"
+        ]
+      ]
+    },
+    {
+      "name": "v1 produced clauses",
+      "pass": true,
+      "detail": {
+        "clauses": [
+          10,
+          null
+        ],
+        "deadlines": [
+          3,
+          2
+        ],
+        "payment_milestones": [
+          0,
+          0
+        ],
+        "obligations": [
+          4,
+          4
+        ],
+        "extractions": [
+          15,
+          3
+        ]
+      }
+    },
+    {
+      "name": "engine rows reference clauses before revision",
+      "pass": true,
+      "detail": {
+        "deadlines": [
+          3,
+          2
+        ],
+        "payment_milestones": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "create new version returns 201",
+      "pass": true,
+      "detail": "{\"id\":\"8bfde984-7366-474b-aa8a-da045c042ae8\",\"contract_id\":\"108db666-4bbf-4d5b-8935-0ca4bc731577\",\"version_number\":2,\"version_label\":\"v2\",\"parent_version_id\":\"bcf95aae-9dd8-44b1-9028-79c4256ead7f\",\"source\":\"client_revision\",\"status\":\"ready\",\"change_summary\":\"Client Review\",\"file_path\":\"cfeb9c57e0c64126a5a4b55255a64a8e_qa-version-smoke-v2.docx\",\"ai_summary\":\"qa-version-smoke \u00b7 \u0634\u0631\u0643\u0629 \u0627\u0644\u0628\u0646\u064a\u0627\u0646 \u0627\u0644\u062d\u062f\u064a\u062b\u0629 "
+    },
+    {
+      "name": "response reports v2",
+      "pass": true,
+      "detail": 2
+    },
+    {
+      "name": "exactly two versions, no duplicates",
+      "pass": true,
+      "detail": [
+        [
+          1,
+          "initial_upload",
+          "ready",
+          false,
+          "Initial upload",
+          "bbf51a0b075840e7bbbcd72b04f38ffc_qa-version-smoke.docx"
+        ],
+        [
+          2,
+          "client_revision",
+          "ready",
+          true,
+          "Client Review",
+          "cfeb9c57e0c64126a5a4b55255a64a8e_qa-version-smoke-v2.docx"
+        ]
+      ]
+    },
+    {
+      "name": "v2 is current",
+      "pass": true,
+      "detail": [
+        2,
+        "client_revision",
+        "ready",
+        true,
+        "Client Review",
+        "cfeb9c57e0c64126a5a4b55255a64a8e_qa-version-smoke-v2.docx"
+      ]
+    },
+    {
+      "name": "v1 is no longer current",
+      "pass": true,
+      "detail": [
+        1,
+        "initial_upload",
+        "ready",
+        false,
+        "Initial upload",
+        "bbf51a0b075840e7bbbcd72b04f38ffc_qa-version-smoke.docx"
+      ]
+    },
+    {
+      "name": "v2 records the change reason",
+      "pass": true,
+      "detail": "Client Review"
+    },
+    {
+      "name": "v2 source is client_revision",
+      "pass": true,
+      "detail": "client_revision"
+    },
+    {
+      "name": "v2 finished processing",
+      "pass": true,
+      "detail": "ready"
+    },
+    {
+      "name": "contract left processing state",
+      "pass": true,
+      "detail": [
+        "ready",
+        "negotiation"
+      ]
+    },
+    {
+      "name": "re-extraction produced clauses",
+      "pass": true,
+      "detail": {
+        "clauses": [
+          10,
+          null
+        ],
+        "deadlines": [
+          3,
+          2
+        ],
+        "payment_milestones": [
+          0,
+          0
+        ],
+        "obligations": [
+          4,
+          4
+        ],
+        "extractions": [
+          15,
+          3
+        ]
+      }
+    },
+    {
+      "name": "no dangling clause links",
+      "pass": true,
+      "detail": 0
+    },
+    {
+      "name": "engine rows relinked to new clauses",
+      "pass": true,
+      "detail": {
+        "deadlines": [
+          3,
+          2
+        ],
+        "payment_milestones": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "version_created activity recorded for v2",
+      "pass": true,
+      "detail": [
+        [
+          "extraction_completed",
+          "1"
+        ],
+        [
+          "intelligence_rebuilt",
+          null
+        ],
+        [
+          "version_created",
+          "2"
+        ],
+        [
+          "extraction_completed",
+          "2"
+        ],
+        [
+          "intelligence_rebuilt",
+          null
+        ]
+      ]
+    },
+    {
+      "name": "no duplicate version_created events",
+      "pass": true,
+      "detail": [
+        [
+          "version_created",
+          "2"
+        ]
+      ]
+    },
+    {
+      "name": "versions API shows both versions",
+      "pass": true,
+      "detail": [
+        2,
+        1
+      ]
+    },
+    {
+      "name": "versions API current is 2",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "lineage returns 200",
+      "pass": true,
+      "detail": "{\"contract_id\":\"108db666-4bbf-4d5b-8935-0ca4bc731577\",\"current_version_id\":\"8bfde984-7366-474b-aa8a-da045c042ae8\",\"current_version_number\":2,\"versions\":[{\"id\":\"bcf95aae-9dd8-44b1-9028-79c4256ead7f\",\"v"
+    },
+    {
+      "name": "lineage includes v2",
+      "pass": true,
+      "detail": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "lineage v2 has version_created",
+      "pass": true,
+      "detail": [
+        "version_created",
+        "extraction_completed",
+        "intelligence_rebuilt"
+      ]
+    },
+    {
+      "name": "lineage links v2 to its parent",
+      "pass": true,
+      "detail": {
+        "parent": "bcf95aae-9dd8-44b1-9028-79c4256ead7f",
+        "v1": "bcf95aae-9dd8-44b1-9028-79c4256ead7f"
+      }
+    },
+    {
+      "name": "activity API exposes version_created",
+      "pass": true,
+      "detail": [
+        "intelligence_rebuilt",
+        "extraction_completed",
+        "version_created",
+        "intelligence_rebuilt",
+        "extraction_completed"
+      ]
+    }
+  ]
+}

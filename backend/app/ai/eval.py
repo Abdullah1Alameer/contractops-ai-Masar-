@@ -18,7 +18,7 @@ from ..config import DEMO_CONTRACTS_DIR, GROUND_TRUTH_PATH
 from ..db import SessionLocal
 from ..models import Clause, Contract, Extraction, Obligation
 from ..services.storage import storage
-from .pipeline import run_extraction
+from .pipeline import run_extraction, unlink_clause_references
 
 
 def _get_extr(db, contract_id, field):
@@ -96,6 +96,7 @@ def main():
         if not keep:
             for r in rows:
                 cid = r["contract_id"]
+                unlink_clause_references(cid, db)
                 db.query(Obligation).filter_by(contract_id=cid).delete()
                 db.query(Extraction).filter_by(contract_id=cid).delete()
                 db.query(Clause).filter_by(contract_id=cid).delete()

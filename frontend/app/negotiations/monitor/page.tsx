@@ -58,6 +58,9 @@ export default function NegotiationMonitorPage() {
   return (
     <div className="space-y-6">
       <SectionHeader title={t("monitor.title")} eyebrow={t("nav.negotiationMonitor")} />
+      {rows.some((row) => row.simulated) && (
+        <Badge tone="warning">{t("monitor.simulatedLabel")}</Badge>
+      )}
       <div className="flex flex-wrap gap-2">
         <Button variant={filter === null ? "primary" : "secondary"} size="sm" onClick={() => setFilter(null)}>
           {t("common.clear")}

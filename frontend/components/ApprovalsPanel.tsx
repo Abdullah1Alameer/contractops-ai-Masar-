@@ -11,6 +11,7 @@ import Timeline from "@/components/ui/Timeline";
 import ProgressBar from "@/components/ui/ProgressBar";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import {
+  apiErrorCode,
   cancelApproval,
   DEMO_ROLE_EVENT,
   fetchActivity,
@@ -18,6 +19,7 @@ import {
   patchApprovalStep,
   startApproval,
 } from "@/lib/api";
+import { useToast } from "@/components/feedback/ToastProvider";
 import { useI18n, type TKey } from "@/lib/i18n";
 import { mapActivityEvents } from "@/lib/activity";
 import type { ActivityEventRow, ApprovalWorkflowView } from "@/lib/types";
@@ -35,18 +37,22 @@ export default function ApprovalsPanel({
   contractId,
   contractStage,
   highlightId,
+  onLifecycleChange,
 }: {
   contractId: string;
   contractStage?: string;
   highlightId?: string | null;
+  onLifecycleChange?: () => void;
 }) {
   const { t } = useI18n();
   const { confirm } = useConfirm();
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [workflow, setWorkflow] = useState<ApprovalWorkflowView | null>(null);
   const [unresolved, setUnresolved] = useState<{ id: string }[]>([]);
   const [events, setEvents] = useState<ActivityEventRow[]>([]);
   const [comment, setComment] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -72,36 +78,30 @@ export default function ApprovalsPanel({
   }, [load]);
 
   const active = workflow?.status === "in_progress";
-  const canStart =
-    !active &&
-    (contractStage === "negotiation" || contractStage === "internal_review" || !contractStage);
+  const blocked = unresolved.length > 0;
+  const canStart = !active && !blocked && (contractStage === "internal_review" || !contractStage);
+  const actionable = workflow?.actionable ?? false;
 
   const start = () => {
-    const run = (force: boolean) => {
-      setBusy(true);
-      startApproval(contractId, { force })
-        .then((w) => setWorkflow(w))
-        .finally(() => setBusy(false));
-    };
-    if (unresolved.length > 0) {
-      confirm({
-        title: t("approval.unresolvedWarning"),
-        body: t("approval.unresolvedBody"),
-        confirmLabel: t("approval.proceedAnyway"),
-        onConfirm: () => run(true),
-      });
-    } else {
-      confirm({
-        title: t("approval.startTitle"),
-        body: t("approval.startBody"),
-        confirmLabel: t("approval.start"),
-        onConfirm: () => run(false),
-      });
-    }
+    confirm({
+      title: t("approval.startTitle"),
+      body: t("approval.startBody"),
+      confirmLabel: t("approval.start"),
+      onConfirm: () => {
+        setBusy(true);
+        startApproval(contractId)
+          .then((w) => {
+            setWorkflow(w);
+            onLifecycleChange?.();
+          })
+          .catch((error) => toast.error(apiErrorCode(error, t("common.error"))))
+          .finally(() => setBusy(false));
+      },
+    });
   };
 
   const act = async (status: string) => {
-    if (!workflow?.current_step) return;
+    if (!workflow?.current_step || !actionable) return;
     if ((status === "rejected" || status === "changes_requested") && !comment.trim()) return;
     setBusy(true);
     try {
@@ -109,13 +109,33 @@ export default function ApprovalsPanel({
       setWorkflow(w);
       setComment("");
       load();
+      onLifecycleChange?.();
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
     } finally {
       setBusy(false);
     }
   };
 
+  const cancel = async () => {
+    if (!cancelReason.trim()) return;
+    setBusy(true);
+    try {
+      await cancelApproval(contractId, cancelReason.trim());
+      setCancelReason("");
+      load();
+      onLifecycleChange?.();
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requiredRoleLabelKey = CHAIN.find((entry) => entry.role === workflow?.current_required_role)?.labelKey;
+
   if (loading) return <SkeletonCard rows={4} />;
-  if (!workflow && !canStart) return <EmptyState title={t("approval.empty")} />;
+  if (!workflow && !canStart && !blocked) return <EmptyState title={t("approval.empty")} />;
 
   return (
     <div className={cn("space-y-6", highlightId && workflow?.id === highlightId && "rounded-card ring-2 ring-brand-500/40 p-2")}>
@@ -123,6 +143,12 @@ export default function ApprovalsPanel({
         <Button variant="primary" loading={busy} onClick={start}>
           {t("approval.start")}
         </Button>
+      )}
+
+      {!active && blocked && (
+        <p className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-warning-900">
+          <span className="font-semibold">{t("approval.unresolvedWarning")}</span> {t("approval.unresolvedBody")}
+        </p>
       )}
 
       {workflow?.is_stale && (
@@ -176,7 +202,7 @@ export default function ApprovalsPanel({
             </CardBody>
           </Card>
 
-          {workflow.status === "in_progress" && workflow.allowed_actions.length > 0 && (
+          {actionable && workflow.allowed_actions.length > 0 && (
             <Card>
               <CardBody className="space-y-3">
                 <h4 className="font-semibold">{t("approval.currentAction")}</h4>
@@ -202,10 +228,35 @@ export default function ApprovalsPanel({
             </Card>
           )}
 
-          {workflow.status === "in_progress" && (
-            <Button variant="secondary" size="sm" onClick={() => cancelApproval(contractId).then(load)}>
-              {t("approval.cancel")}
-            </Button>
+          {active && !actionable && (
+            <p className="text-sm text-neutral-500">
+              {requiredRoleLabelKey
+                ? `${t("approval.waitingFor")} ${t(requiredRoleLabelKey)}`
+                : t("approval.notActionable")}
+            </p>
+          )}
+
+          {active && (
+            <Card>
+              <CardBody className="space-y-3">
+                <h4 className="font-semibold">{t("approval.cancel")}</h4>
+                <input
+                  className="w-full rounded-lg border p-2 text-sm"
+                  placeholder={t("approval.cancelReasonPlaceholder")}
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy}
+                  disabled={!cancelReason.trim()}
+                  onClick={cancel}
+                >
+                  {t("approval.cancel")}
+                </Button>
+              </CardBody>
+            </Card>
           )}
         </>
       )}

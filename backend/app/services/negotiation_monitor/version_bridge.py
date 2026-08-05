@@ -28,12 +28,10 @@ def create_proposed_version_from_attachment(
     attachment.file_hash_sha256 = file_hash
     if kind == RevisionKind.same:
         attachment.processing_status = "completed"
-        db.commit()
         return "duplicate", None
     if kind in (RevisionKind.unrelated, RevisionKind.supporting):
         attachment.processing_status = "completed"
         attachment.document_type = kind.value
-        db.commit()
         return kind.value, None
 
     v = ver_svc.create_new_version(
@@ -47,9 +45,9 @@ def create_proposed_version_from_attachment(
         make_current=False,
         version_status="under_review",
         run_pipeline=False,
+        commit=False,
     )
     attachment.created_version_id = v.id
     attachment.processing_status = "completed"
     attachment.document_type = "revised_contract"
-    db.commit()
     return "revised", v

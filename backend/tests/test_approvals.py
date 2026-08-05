@@ -1,4 +1,9 @@
-"""Feature 8 approval workflow tests."""
+"""Approval workflow unit tests.
+
+Full start/decide/cancel/override flows are proved against a real database in
+tests/test_approval_lifecycle_integration.py; this module covers the pure
+helpers that guard those flows.
+"""
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -7,19 +12,27 @@ import pytest
 
 from app.services.approvals import (
     DEFAULT_ROLES,
-    act_on_step,
+    OVERRIDABLE_RULES,
+    OVERRIDE_ROLES,
+    ApprovalError,
+    _authorize_override,
+    _negotiation_view,
+    _normalize_override,
+    _reason_audit,
+    _resolve_sequence,
     allowed_actions_for_role,
     approval_summary,
-    cancel_workflow,
     normalize_demo_role,
-    start_workflow,
-    unresolved_negotiations,
 )
 from app.services.reviews import build_public_payload
 
 
 def test_default_four_roles_order():
     assert DEFAULT_ROLES == ["business_owner", "legal", "finance", "executive"]
+
+
+def test_only_legal_and_executive_may_override():
+    assert OVERRIDE_ROLES == {"legal", "executive"}
 
 
 def test_normalize_demo_role_unknown():
@@ -40,52 +53,95 @@ def test_allowed_actions_current_role():
     assert "approved" in allowed_actions_for_role(w, steps, "business_owner")
 
 
-def test_unresolved_negotiations():
-    db = MagicMock()
-    db.query.return_value.filter_by.return_value.all.return_value = [
-        SimpleNamespace(id=uuid.uuid4(), clause_ref="5", workflow_status="ready"),
-        SimpleNamespace(id=uuid.uuid4(), clause_ref="6", workflow_status="accepted"),
-    ]
-    out = unresolved_negotiations(uuid.uuid4(), db)
-    assert len(out) == 1
+def test_allowed_actions_on_closed_workflow():
+    w = SimpleNamespace(status="approved", current_step_order=4)
+    steps = [SimpleNamespace(step_order=4, role="executive", status="approved")]
+    assert allowed_actions_for_role(w, steps, "executive") == []
 
 
-def test_start_workflow_unresolved_without_force():
-    db = MagicMock()
-    cid = uuid.uuid4()
-    contract = SimpleNamespace(id=cid, stage="negotiation")
-    db.get.return_value = contract
-    with patch("app.services.approvals.get_active_workflow", return_value=None):
-        with patch("app.services.approvals.unresolved_negotiations", return_value=[{"id": "x"}]):
-            with pytest.raises(ValueError, match="unresolved_negotiations"):
-                start_workflow(cid, db, force=False)
+def test_resolve_sequence_defaults_to_configured_roles():
+    assert _resolve_sequence(None) == DEFAULT_ROLES
+    assert _resolve_sequence({"legal": "Layla"}) == DEFAULT_ROLES
 
 
-def test_act_wrong_role():
-    step = SimpleNamespace(id=uuid.uuid4(), workflow_id=uuid.uuid4(), role="legal", step_order=2, status="pending")
-    w = SimpleNamespace(id=step.workflow_id, contract_id=uuid.uuid4(), status="in_progress", current_step_order=2)
-    db = MagicMock()
-    db.get.side_effect = lambda model, pk: step if pk == step.id else w
-    with pytest.raises(ValueError, match="wrong_role"):
-        act_on_step(step.id, db, decision="approved", comment=None, demo_role="finance")
+def test_resolve_sequence_rejects_unknown_role():
+    with pytest.raises(ApprovalError) as excinfo:
+        _resolve_sequence({"chief_pirate": "Nobody"})
+    assert excinfo.value.code == "invalid_approval_sequence"
+    assert excinfo.value.status_code == 422
 
 
-def test_act_out_of_order():
-    step = SimpleNamespace(id=uuid.uuid4(), workflow_id=uuid.uuid4(), role="legal", step_order=2, status="locked")
-    w = SimpleNamespace(id=step.workflow_id, contract_id=uuid.uuid4(), status="in_progress", current_step_order=1)
-    db = MagicMock()
-    db.get.side_effect = lambda model, pk: step if pk == step.id else w
-    with pytest.raises(ValueError, match="out_of_order"):
-        act_on_step(step.id, db, decision="approved", comment=None, demo_role="legal")
+def test_legacy_force_flag_needs_structured_override():
+    with pytest.raises(ApprovalError) as excinfo:
+        _normalize_override(None, force=True)
+    assert excinfo.value.code == "approval_reason_required"
+    assert _normalize_override(None, force=False) is None
 
 
-def test_act_reject_requires_comment():
-    step = SimpleNamespace(id=uuid.uuid4(), workflow_id=uuid.uuid4(), role="business_owner", step_order=1, status="pending")
-    w = SimpleNamespace(id=step.workflow_id, contract_id=uuid.uuid4(), status="in_progress", current_step_order=1)
-    db = MagicMock()
-    db.get.side_effect = lambda model, pk: step if pk == step.id else w
-    with pytest.raises(ValueError, match="comment_required"):
-        act_on_step(step.id, db, decision="rejected", comment="", demo_role="business_owner")
+def test_normalize_override_requires_reason_and_known_rules():
+    with pytest.raises(ApprovalError) as excinfo:
+        _normalize_override({"reason": "   ", "negotiation_ids": []}, force=False)
+    assert excinfo.value.code == "approval_reason_required"
+
+    with pytest.raises(ApprovalError) as excinfo:
+        _normalize_override(
+            {"reason": "documented", "rules": ["workflow_stale"]},
+            force=False,
+        )
+    assert excinfo.value.code == "forbidden_transition"
+
+    normalized = _normalize_override({"reason": " documented ", "negotiation_ids": [1]}, force=False)
+    assert normalized == {"reason": "documented", "negotiation_ids": ["1"], "rules": []}
+
+
+def test_authorize_override_blocks_unlisted_blockers():
+    listed = SimpleNamespace(id=uuid.uuid4(), clause_ref="7.1", workflow_status="ready")
+    unlisted = SimpleNamespace(id=uuid.uuid4(), clause_ref="9.2", workflow_status="ready")
+    override = {"reason": "documented", "negotiation_ids": [str(listed.id)], "rules": []}
+
+    with pytest.raises(ApprovalError) as excinfo:
+        _authorize_override(override, "legal", [listed, unlisted])
+
+    assert excinfo.value.code == "unresolved_negotiations"
+    assert excinfo.value.payload["unresolved"] == [_negotiation_view(unlisted)]
+
+
+def test_authorize_override_requires_privileged_role():
+    blocker = SimpleNamespace(id=uuid.uuid4(), clause_ref=None, workflow_status="ready")
+    override = {"reason": "documented", "negotiation_ids": [str(blocker.id)], "rules": []}
+
+    with pytest.raises(ApprovalError) as excinfo:
+        _authorize_override(override, "finance", [blocker])
+
+    assert excinfo.value.code == "approval_role_required"
+    assert excinfo.value.status_code == 403
+
+
+def test_authorize_override_records_rules_and_ids():
+    blocker = SimpleNamespace(id=uuid.uuid4(), clause_ref=None, workflow_status="ready")
+    override = {"reason": "documented", "negotiation_ids": [str(blocker.id)], "rules": []}
+
+    granted = _authorize_override(override, "executive", [blocker])
+
+    assert granted["negotiation_ids"] == [str(blocker.id)]
+    assert granted["rules"] == list(OVERRIDABLE_RULES)
+
+
+def test_missing_override_keeps_deterministic_unresolved_error():
+    blocker = SimpleNamespace(id=uuid.uuid4(), clause_ref="7.1", workflow_status="pending_analysis")
+
+    with pytest.raises(ApprovalError) as excinfo:
+        _authorize_override(None, "legal", [blocker])
+
+    assert excinfo.value.code == "unresolved_negotiations"
+    assert excinfo.value.status_code == 409
+
+
+def test_reason_audit_never_returns_reason_text():
+    audit = _reason_audit("Confidential legal position")
+    assert audit["reason_present"] is True
+    assert "Confidential" not in str(audit)
+    assert _reason_audit("  ") == {"reason_present": False}
 
 
 def test_public_review_payload_no_approval_keys():
@@ -120,195 +176,12 @@ def test_public_review_payload_no_approval_keys():
     assert not any(k.lower().startswith("approval") for k in payload.keys())
 
 
-def test_start_workflow_creates_four_steps():
-    cid = uuid.uuid4()
-    contract = SimpleNamespace(id=cid, stage="negotiation")
-    db = MagicMock()
-    db.get.return_value = contract
-    added = []
-
-    def capture_add(obj):
-        added.append(obj)
-
-    db.add = capture_add
-    db.flush = MagicMock()
-    db.commit = MagicMock()
-    db.refresh = MagicMock()
-
-    with patch("app.services.approvals.get_active_workflow", return_value=None):
-        with patch("app.services.approvals.unresolved_negotiations", return_value=[]):
-            with patch("app.services.approvals.set_stage") as mock_stage:
-                with patch("app.services.approvals.log_activity"):
-                    start_workflow(cid, db, force=False)
-
-    steps = [o for o in added if hasattr(o, "step_order")]
-    assert len(steps) == 4
-    assert [s.step_order for s in steps] == [1, 2, 3, 4]
-    assert steps[0].status == "pending"
-    assert steps[1].status == "locked"
-    mock_stage.assert_called_once()
-
-
-def test_start_workflow_already_active():
-    db = MagicMock()
-    contract = SimpleNamespace(id=uuid.uuid4(), stage="negotiation")
-    db.get.return_value = contract
-    with patch("app.services.approvals.get_active_workflow", return_value=SimpleNamespace()):
-        with patch("app.services.approvals.unresolved_negotiations", return_value=[]):
-            with pytest.raises(ValueError, match="workflow_already_active"):
-                start_workflow(contract.id, db)
-
-
-def test_start_workflow_contract_not_eligible():
-    db = MagicMock()
-    contract = SimpleNamespace(id=uuid.uuid4(), stage="approved")
-    db.get.return_value = contract
-    with patch("app.services.approvals.get_active_workflow", return_value=None):
-        with pytest.raises(ValueError, match="contract_not_eligible"):
-            start_workflow(contract.id, db)
-
-
-def test_act_approve_advances_current_step():
-    wid = uuid.uuid4()
-    cid = uuid.uuid4()
-    step1 = SimpleNamespace(
-        id=uuid.uuid4(),
-        workflow_id=wid,
-        contract_id=cid,
-        role="business_owner",
-        step_order=1,
-        status="pending",
-    )
-    step2 = SimpleNamespace(
-        id=uuid.uuid4(),
-        workflow_id=wid,
-        contract_id=cid,
-        role="legal",
-        step_order=2,
-        status="locked",
-    )
-    w = SimpleNamespace(
-        id=wid,
-        contract_id=cid,
-        status="in_progress",
-        current_step_order=1,
-        started_by="demo",
-        started_at=None,
-        completed_at=None,
-        updated_at=None,
-    )
-    contract = SimpleNamespace(id=cid, stage="internal_review")
-    db = MagicMock()
-    db.get.side_effect = lambda model, pk: (
-        step1 if pk == step1.id else w if pk == wid else contract
-    )
-    db.query.return_value.filter_by.return_value.first.return_value = step2
-    db.commit = MagicMock()
-    db.refresh = MagicMock()
-
-    with patch("app.services.approvals.log_activity"):
-        with patch("app.services.approvals.serialize_workflow", return_value={"current_step_order": 2}) as mock_ser:
-            act_on_step(step1.id, db, decision="approved", comment=None, demo_role="business_owner")
-
-    assert w.current_step_order == 2
-    assert step2.status == "pending"
-    mock_ser.assert_called_once()
-
-
-def test_act_final_approval_sets_stage_approved():
-    wid = uuid.uuid4()
-    cid = uuid.uuid4()
-    step = SimpleNamespace(
-        id=uuid.uuid4(),
-        workflow_id=wid,
-        contract_id=cid,
-        role="executive",
-        step_order=4,
-        status="pending",
-    )
-    w = SimpleNamespace(
-        id=wid,
-        contract_id=cid,
-        status="in_progress",
-        current_step_order=4,
-        started_by="demo",
-        started_at=None,
-        completed_at=None,
-        updated_at=None,
-    )
-    contract = SimpleNamespace(id=cid, stage="internal_review")
-    db = MagicMock()
-    db.get.side_effect = lambda model, pk: (
-        step if pk == step.id else w if pk == wid else contract
-    )
-    db.commit = MagicMock()
-    db.refresh = MagicMock()
-
-    with patch("app.services.approvals.log_activity"):
-        with patch("app.services.approvals.set_stage") as mock_stage:
-            with patch("app.services.approvals.serialize_workflow", return_value={"status": "approved"}):
-                act_on_step(step.id, db, decision="approved", comment="OK", demo_role="executive")
-
-    assert w.status == "approved"
-    mock_stage.assert_called_with(contract, "approved", db)
-
-
-def test_act_on_completed_workflow():
-    step = SimpleNamespace(id=uuid.uuid4(), workflow_id=uuid.uuid4(), role="legal", step_order=1, status="pending")
-    w = SimpleNamespace(id=step.workflow_id, contract_id=uuid.uuid4(), status="approved", current_step_order=1)
-    db = MagicMock()
-    db.get.side_effect = lambda model, pk: step if pk == step.id else w
-    with pytest.raises(ValueError, match="workflow_completed"):
-        act_on_step(step.id, db, decision="approved", comment=None, demo_role="legal")
-
-
-def test_cancel_active_workflow():
-    cid = uuid.uuid4()
-    w = SimpleNamespace(
-        id=uuid.uuid4(),
-        contract_id=cid,
-        status="in_progress",
-        current_step_order=1,
-        started_by="demo",
-        started_at=None,
-        completed_at=None,
-    )
-    contract = SimpleNamespace(id=cid, stage="internal_review")
-    db = MagicMock()
-    db.get.return_value = contract
-    db.commit = MagicMock()
-    db.refresh = MagicMock()
-
-    with patch("app.services.approvals.get_active_workflow", return_value=w):
-        with patch("app.services.approvals.set_stage") as mock_stage:
-            with patch("app.services.approvals.log_activity"):
-                with patch("app.services.approvals._steps_for_workflow", return_value=[]):
-                    out = cancel_workflow(cid, db)
-
-    assert w.status == "cancelled"
-    mock_stage.assert_called_with(contract, "negotiation", db)
-    assert out["status"] == "cancelled"
-
-
-def test_approval_summary_counts():
-    db = MagicMock()
-    db.query.return_value.filter_by.return_value.all.return_value = [
-        SimpleNamespace(current_step_order=2, id=uuid.uuid4()),
-    ]
+def test_approval_summary_counts_canonical_stages():
     pending_step = SimpleNamespace(role="finance", status="pending", step_order=2)
-    db.query.return_value.filter_by.return_value.first.return_value = pending_step
-    db.query.return_value.all.side_effect = [
-        [
-            SimpleNamespace(stage="internal_review"),
-            SimpleNamespace(stage="approved"),
-        ],
-        [SimpleNamespace(current_step_order=2, id=uuid.uuid4())],
-    ]
-
-    # Re-mock query chain for approval_summary's two queries
     contracts_q = MagicMock()
     contracts_q.all.return_value = [
         SimpleNamespace(stage="internal_review"),
+        SimpleNamespace(stage="ready_to_sign"),
         SimpleNamespace(stage="approved"),
     ]
     workflow_q = MagicMock()
@@ -327,8 +200,10 @@ def test_approval_summary_counts():
             return step_q
         return MagicMock()
 
+    db = MagicMock()
     db.query.side_effect = query_side
     summary = approval_summary(db)
+
     assert summary["internal_review"] == 1
     assert summary["pending_finance"] == 1
-    assert summary["approved_awaiting_signature"] == 1
+    assert summary["approved_awaiting_signature"] == 2

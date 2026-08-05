@@ -302,6 +302,8 @@ export async function patchNegotiation(
     reasoning: string;
     counter_clause: string;
     counter_clause_ar: string;
+    lawyer_final_clause: string | null;
+    lawyer_final_clause_ar: string | null;
     status: string;
   }>
 ) {
@@ -312,12 +314,32 @@ export async function sendNegotiationUpdated(id: string) {
   return apiJson<import("./types").SendNegotiationResponse>(`/api/negotiations/${id}/send`, "POST", {});
 }
 
+export async function abandonNegotiation(id: string, reason: string) {
+  return apiJson<import("./types").NegotiationRow>(
+    `/api/negotiations/${id}/abandon`,
+    "POST",
+    { reason }
+  );
+}
+
 export async function fetchApprovals(contractId: string) {
   return api<import("./types").ApprovalsResponse>(`/api/contracts/${contractId}/approvals`);
 }
 
-export async function startApproval(contractId: string, body: { approver_names?: Record<string, string>; force?: boolean }) {
-  return apiJson<import("./types").ApprovalWorkflowView>(`/api/contracts/${contractId}/approvals/start`, "POST", body);
+export async function startApproval(
+  contractId: string,
+  body: {
+    approver_names?: Record<string, string>;
+    override?: { reason: string; negotiation_ids: string[]; rules?: string[] };
+  } = {}
+) {
+  const res = await apiJson<import("./types").ApprovalWorkflowView>(
+    `/api/contracts/${contractId}/approvals/start`,
+    "POST",
+    body
+  );
+  invalidateContract(contractId);
+  return res;
 }
 
 export async function patchApprovalStep(stepId: string, body: { status: string; comment?: string }) {
@@ -326,8 +348,14 @@ export async function patchApprovalStep(stepId: string, body: { status: string; 
   return res;
 }
 
-export async function cancelApproval(contractId: string) {
-  return apiJson<import("./types").ApprovalWorkflowView>(`/api/contracts/${contractId}/approvals/cancel`, "POST", {});
+export async function cancelApproval(contractId: string, reason: string) {
+  const res = await apiJson<import("./types").ApprovalWorkflowView>(
+    `/api/contracts/${contractId}/approvals/cancel`,
+    "POST",
+    { reason }
+  );
+  invalidateContract(contractId);
+  return res;
 }
 
 export async function fetchActivity(contractId: string) {
@@ -454,10 +482,12 @@ export async function uploadNewVersion(
   form.append("file", file);
   form.append("source", source);
   form.append("change_summary", changeSummary);
-  return api<import("./types").ContractVersionRow>(`/api/contracts/${contractId}/versions`, {
+  const res = await api<import("./types").ContractVersionRow>(`/api/contracts/${contractId}/versions`, {
     method: "POST",
     body: form,
   });
+  invalidateContract(contractId);
+  return res;
 }
 
 export async function setCurrentVersion(versionId: string, contractId?: string) {
