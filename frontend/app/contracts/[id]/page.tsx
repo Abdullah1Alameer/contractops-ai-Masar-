@@ -537,7 +537,7 @@ export default function ContractDetailPage() {
           <TabPanel value="review">
                 <div>
                   <h3 className="mb-3 text-sm font-semibold">{t("review.history")}</h3>
-                  <ReviewHistoryPanel contractId={id} highlightId={highlightReview} />
+                  <ReviewHistoryPanel contractId={id} highlightId={highlightReview} contractStage={detail.stage} />
                 </div>
           </TabPanel>
 
@@ -556,6 +556,7 @@ export default function ContractDetailPage() {
               contractStage={detail.stage}
               highlightId={highlightWorkflow}
               onLifecycleChange={load}
+              onGoToNegotiation={() => setTab("negotiation")}
             />
           </TabPanel>
 

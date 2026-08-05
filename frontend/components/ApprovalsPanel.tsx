@@ -38,11 +38,13 @@ export default function ApprovalsPanel({
   contractStage,
   highlightId,
   onLifecycleChange,
+  onGoToNegotiation,
 }: {
   contractId: string;
   contractStage?: string;
   highlightId?: string | null;
   onLifecycleChange?: () => void;
+  onGoToNegotiation?: () => void;
 }) {
   const { t } = useI18n();
   const { confirm } = useConfirm();
@@ -79,7 +81,10 @@ export default function ApprovalsPanel({
 
   const active = workflow?.status === "in_progress";
   const blocked = unresolved.length > 0;
-  const canStart = !active && !blocked && (contractStage === "internal_review" || !contractStage);
+  // Canonical precondition only (docs/contract-lifecycle-policy.md §6 "Start
+  // conditions"): stage must be internal_review. No fallback for a missing
+  // stage — an unknown stage must never be treated as "start is allowed".
+  const canStart = !active && !blocked && contractStage === "internal_review";
   const actionable = workflow?.actionable ?? false;
 
   const start = () => {
@@ -135,7 +140,20 @@ export default function ApprovalsPanel({
   const requiredRoleLabelKey = CHAIN.find((entry) => entry.role === workflow?.current_required_role)?.labelKey;
 
   if (loading) return <SkeletonCard rows={4} />;
-  if (!workflow && !canStart && !blocked) return <EmptyState title={t("approval.empty")} />;
+  if (!workflow && !canStart && !blocked) {
+    return (
+      <EmptyState
+        title={t("approval.empty")}
+        description={
+          contractStage
+            ? `${t("approval.requiresInternalReview")} ${t(`stage.${contractStage}` as import("@/lib/i18n").TKey)}`
+            : undefined
+        }
+        actionLabel={contractStage === "negotiation" && onGoToNegotiation ? t("approval.goToNegotiation") : undefined}
+        onAction={contractStage === "negotiation" ? onGoToNegotiation : undefined}
+      />
+    );
+  }
 
   return (
     <div className={cn("space-y-6", highlightId && workflow?.id === highlightId && "rounded-card ring-2 ring-brand-500/40 p-2")}>
@@ -146,9 +164,16 @@ export default function ApprovalsPanel({
       )}
 
       {!active && blocked && (
-        <p className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-warning-900">
-          <span className="font-semibold">{t("approval.unresolvedWarning")}</span> {t("approval.unresolvedBody")}
-        </p>
+        <div className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-warning-900">
+          <p>
+            <span className="font-semibold">{t("approval.unresolvedWarning")}</span> {t("approval.unresolvedBody")}
+          </p>
+          {onGoToNegotiation && (
+            <Button variant="secondary" size="sm" className="mt-2" onClick={onGoToNegotiation}>
+              {t("approval.goToNegotiation")}
+            </Button>
+          )}
+        </div>
       )}
 
       {workflow?.is_stale && (

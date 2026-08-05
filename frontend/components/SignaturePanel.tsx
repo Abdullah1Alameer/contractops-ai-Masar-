@@ -75,9 +75,12 @@ export default function SignaturePanel({
   useEffect(() => setActivated(false), [contractId]);
 
   const req = bundle?.request;
-  const canCreate =
-    (bundle?.can_create ?? (contractStage === "approved" || contractStage === "ready_to_sign")) &&
-    !req?.status?.match(/partially_signed|completed/);
+  // `can_create` is the backend's own eligibility computation (stage ==
+  // ready_to_sign, current version approved, active approved workflow, no
+  // unresolved negotiations, no active request — see
+  // `_can_create_request_readonly`). If the bundle failed to load we cannot
+  // know eligibility, so default to false rather than guessing from stage.
+  const canCreate = (bundle?.can_create ?? false) && !req?.status?.match(/partially_signed|completed/);
   // Executed artifacts follow the request, not the stage, so they stay reachable from
   // `signed` through `active` and every later stage. Only activation is stage-gated.
   const completed = req?.status === "completed";
@@ -197,7 +200,18 @@ export default function SignaturePanel({
   };
 
   if (loading) return <SkeletonCard rows={3} />;
-  if (!req && !canCreate) return <EmptyState title={t("signature.title")} />;
+  if (!req && !canCreate) {
+    return (
+      <EmptyState
+        title={t("signature.title")}
+        description={
+          contractStage
+            ? `${t("signature.requiresReadyToSign")} ${t(`stage.${contractStage}` as import("@/lib/i18n").TKey)}`
+            : undefined
+        }
+      />
+    );
+  }
 
   return (
     <div className={cn("space-y-4", highlightId && req?.id === highlightId && "rounded-card ring-2 ring-brand-500/40 p-2")}>

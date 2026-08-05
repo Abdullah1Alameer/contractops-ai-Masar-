@@ -2,32 +2,49 @@
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
+// Canonical business-lifecycle stages only (docs/contract-lifecycle-policy.md
+// §3/§9). Each stage belongs to exactly one step — no stage may appear in two
+// entries, or the first (wrong) match wins and silently mis-highlights the
+// stepper. `approved`/`awaiting_signature` are read-compatibility aliases for
+// pre-canonical rows (see backend `LEGACY_STAGE_MAP`), not new stages.
 const STEPS = [
-  { id: "draft", key: "stepper.draft", stages: ["draft", "negotiation"] },
-  { id: "review", key: "stepper.review", stages: ["client_review", "awaiting_client"] },
+  { id: "draft", key: "stepper.draft", stages: ["draft", "ready_for_client"] },
+  { id: "review", key: "stepper.review", stages: ["client_review"] },
   { id: "negotiation", key: "stepper.negotiation", stages: ["negotiation"] },
   { id: "approval", key: "stepper.approval", stages: ["internal_review"] },
-  { id: "signature", key: "stepper.signature", stages: ["ready_to_sign", "awaiting_signature", "partially_signed", "approved"] },
-  { id: "completed", key: "stepper.completed", stages: ["active", "signed", "completed"] },
+  { id: "signature", key: "stepper.signature", stages: ["ready_to_sign", "partially_signed", "approved", "awaiting_signature"] },
+  { id: "completed", key: "stepper.completed", stages: ["signed", "active", "completed"] },
 ] as const;
 
-function stepIndex(stage: string | null | undefined) {
-  const s = stage ?? "negotiation";
+const TERMINAL_STAGES = new Set(["rejected", "cancelled", "terminated"]);
+
+/** -1 means "no step to highlight" — an unset, terminal, or unrecognized
+ * stage. Never guess a stage; a stale/absent value must not silently render
+ * as if the contract were still early in the pipeline. */
+function stepIndex(stage: string | null | undefined): number {
+  if (!stage || TERMINAL_STAGES.has(stage)) return -1;
   for (let i = 0; i < STEPS.length; i++) {
-    if (STEPS[i].stages.includes(s as never)) return i;
+    if ((STEPS[i].stages as readonly string[]).includes(stage)) return i;
   }
-  if (s === "draft") return 0;
-  return 1;
+  return -1;
 }
 
 export default function WorkflowStepper({ stage }: { stage?: string | null }) {
   const { t } = useI18n();
   const current = stepIndex(stage);
 
+  if (stage && TERMINAL_STAGES.has(stage)) {
+    return (
+      <p className="text-sm font-semibold text-danger-700">
+        {t(`stage.${stage}` as import("@/lib/i18n").TKey)}
+      </p>
+    );
+  }
+
   return (
     <ol className="flex flex-wrap items-center gap-2 md:gap-0">
       {STEPS.map((step, i) => {
-        const done = i < current;
+        const done = current >= 0 && i < current;
         const active = i === current;
         return (
           <li key={step.id} className="flex items-center">

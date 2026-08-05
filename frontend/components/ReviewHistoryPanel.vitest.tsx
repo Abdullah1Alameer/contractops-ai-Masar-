@@ -88,10 +88,10 @@ function row(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderPanel() {
+function renderPanel(contractStage?: string) {
   return render(
     <I18nProvider>
-      <ReviewHistoryPanel contractId={CONTRACT_ID} />
+      <ReviewHistoryPanel contractId={CONTRACT_ID} contractStage={contractStage} />
     </I18nProvider>
   );
 }
@@ -217,5 +217,23 @@ describe("ReviewHistoryPanel persisted delivery", () => {
     fireEvent.click(await screen.findByText("نسخ الرابط"));
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("تعذّر نسخ الرابط"));
+  });
+
+  it("offers Restart on a stale review only when the contract is ready_for_client", async () => {
+    fetchContractReviews.mockResolvedValue([row({ is_stale: true })]);
+    renderPanel("ready_for_client");
+
+    expect(await screen.findByText("إعادة البدء على الإصدار الحالي")).toBeTruthy();
+  });
+
+  it("never offers Restart on a stale review while the contract is in another stage (e.g. negotiation)", async () => {
+    fetchContractReviews.mockResolvedValue([row({ is_stale: true })]);
+    renderPanel("negotiation");
+
+    await screen.findByText(/jane@example.invalid/);
+    expect(screen.queryByText("إعادة البدء على الإصدار الحالي")).toBeNull();
+    expect(
+      screen.getByText("لا يمكن إنشاء رابط مراجعة جديد أثناء التفاوض. تابع من تبويب التفاوض.")
+    ).toBeTruthy();
   });
 });

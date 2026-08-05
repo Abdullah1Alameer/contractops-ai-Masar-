@@ -16,9 +16,11 @@ import { cn } from "@/lib/utils";
 export default function ReviewHistoryPanel({
   contractId,
   highlightId,
+  contractStage,
 }: {
   contractId: string;
   highlightId?: string | null;
+  contractStage?: string | null;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -101,7 +103,11 @@ export default function ReviewHistoryPanel({
                   {versionLabel(r.version_id)} → {current?.version_label ?? "—"}
                 </p>
                 <div className="mt-2">
-                  <SendForReviewDialog contractId={contractId} onSent={load} triggerLabel={t("versions.staleRestart")} />
+                  {contractStage === "ready_for_client" ? (
+                    <SendForReviewDialog contractId={contractId} onSent={load} triggerLabel={t("versions.staleRestart")} />
+                  ) : (
+                    <p className="text-xs text-warning-800">{t("versions.staleRestartUnavailable")}</p>
+                  )}
                 </div>
               </div>
             )}

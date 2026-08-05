@@ -251,16 +251,48 @@ function NegotiationResult({
           <CardBody>
             <h4 className="mb-2 font-semibold">{t("negotiation.summaryTitle")}</h4>
             <dl className="grid gap-1 text-sm text-gray-700">
-              {Object.entries(draft.final_summary).map(([k, v]) => (
-                <div key={k}>
-                  <dt className="inline font-semibold">{k}: </dt>
-                  <dd className="inline whitespace-pre-wrap">{String(v ?? "—")}</dd>
-                </div>
-              ))}
+              {Object.entries(draft.final_summary)
+                .filter(([k]) => k !== "review_link")
+                .map(([k, v]) => (
+                  <div key={k}>
+                    <dt className="inline font-semibold">{k}: </dt>
+                    <dd className="inline whitespace-pre-wrap">{String(v ?? "—")}</dd>
+                  </div>
+                ))}
             </dl>
           </CardBody>
         </Card>
       )}
+
+      {/* Per docs/contract-lifecycle-policy.md §5, negotiation resolves to
+          internal_review only when the counterparty accepts the sent
+          counterproposal — there is no internal "mark agreement reached"
+          endpoint, and none should bypass that public decision. This is the
+          only remaining action while waiting: reach the counterparty again
+          with the same link, or abandon the negotiation. */}
+      {draft.workflow_status === "sent_to_client" && (
+        <div className="rounded-card border border-info-200/80 bg-info-50/60 p-3">
+          <p className="text-sm font-semibold text-info-900">{t("negotiation.waitingForClient")}</p>
+          <p className="mt-1 text-xs text-info-800">{t("negotiation.waitingForClientBody")}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {typeof draft.final_summary?.review_link === "string" && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => copyText(draft.final_summary!.review_link as string)}
+              >
+                {t("negotiation.copyClientLink")}
+              </Button>
+            )}
+            {row.actionable !== false && !row.is_stale && (
+              <Button variant="danger" size="sm" loading={busy} onClick={abandon}>
+                {t("negotiation.abandon")}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
       {row.actionable !== false && !row.is_stale && row.workflow_status !== "sent_to_client" && row.status !== "sent" && (
         <div className="flex flex-wrap gap-2">
           <Button variant="primary" size="sm" loading={busy} onClick={() => save({ status: "approved" })}>
