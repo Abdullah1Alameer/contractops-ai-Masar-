@@ -4,10 +4,12 @@ import { useParams } from "next/navigation";
 
 import SignatureCanvas from "@/components/SignatureCanvas";
 import TypedSignaturePreview from "@/components/TypedSignaturePreview";
+import { useToast } from "@/components/feedback/ToastProvider";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import {
+  apiErrorCode,
   declineSignerPortal,
   fetchSignerPortal,
   openSignerPortal,
@@ -19,12 +21,25 @@ import type { SignerPublicPayload } from "@/lib/types";
 
 type Method = "drawn" | "typed" | "uploaded";
 
+// The demo prototype disclosure must stay visible on every state of this public
+// page — loading, error, declined, completed, waiting, and the active signing
+// form — and is intentionally identical text in both languages, not translated.
+function PrototypeDisclosure() {
+  const { t } = useI18n();
+  return (
+    <p className="mx-auto max-w-4xl px-4 pb-2 pt-3 text-center text-xs font-medium text-gray-500">
+      {t("signature.demoDisclosure")}
+    </p>
+  );
+}
+
 export default function SignPage() {
   const { t, lang } = useI18n();
+  const toast = useToast();
   const params = useParams<{ token: string }>();
   const token = params.token;
   const [data, setData] = useState<SignerPublicPayload | null>(null);
-  const [error, setError] = useState(false);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [method, setMethod] = useState<Method>("drawn");
   const [drawn, setDrawn] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
@@ -34,10 +49,10 @@ export default function SignPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    setError(false);
+    setErrorCode(null);
     fetchSignerPortal(token)
       .then(setData)
-      .catch(() => setError(true));
+      .catch((caught) => setErrorCode(apiErrorCode(caught, "unknown")));
   }, [token]);
 
   useEffect(() => {
@@ -65,6 +80,8 @@ export default function SignPage() {
         signer_name_confirmation: nameConfirm,
       });
       setData(out);
+    } catch (caught) {
+      toast.error(t("signature.errorWithCode").replace("{code}", apiErrorCode(caught, "unknown")));
     } finally {
       setBusy(false);
     }
@@ -76,21 +93,39 @@ export default function SignPage() {
     try {
       const out = await declineSignerPortal(token, declineReason);
       setData(out);
+    } catch (caught) {
+      toast.error(t("signature.errorWithCode").replace("{code}", apiErrorCode(caught, "unknown")));
     } finally {
       setBusy(false);
     }
   };
 
-  if (error) {
-    return <p className="p-8 text-center text-danger-600">{t("common.error")}</p>;
+  if (errorCode) {
+    return (
+      <div className="mx-auto max-w-lg space-y-4 p-8 text-center">
+        <PrototypeDisclosure />
+        <p className="text-danger-600">{t("signature.errorWithCode").replace("{code}", errorCode)}</p>
+        <Button variant="secondary" onClick={load}>
+          {t("common.retry")}
+        </Button>
+      </div>
+    );
   }
-  if (!data) return <p className="p-8 text-center">{t("common.loading")}</p>;
+  if (!data) {
+    return (
+      <div className="p-8 text-center">
+        <PrototypeDisclosure />
+        <p>{t("common.loading")}</p>
+      </div>
+    );
+  }
 
   const consentLabel = lang === "ar" ? data.consent_text.ar : data.consent_text.en;
 
   if (data.declined) {
     return (
       <div className="mx-auto max-w-lg p-8 text-center">
+        <PrototypeDisclosure />
         <h1 className="text-xl font-bold">{t("signature.declinedState")}</h1>
       </div>
     );
@@ -99,6 +134,7 @@ export default function SignPage() {
   if (data.read_only && data.signer.status === "signed") {
     return (
       <div className="mx-auto max-w-lg space-y-4 p-8 text-center">
+        <PrototypeDisclosure />
         <h1 className="text-xl font-bold text-success-700">{t("signature.completed")}</h1>
         <p className="text-sm text-gray-600">{data.signer.signed_at}</p>
       </div>
@@ -108,6 +144,7 @@ export default function SignPage() {
   if (data.waiting_for_prior) {
     return (
       <div className="mx-auto max-w-lg p-8 text-center">
+        <PrototypeDisclosure />
         <p>{t("signature.waitingPrior")}</p>
       </div>
     );
@@ -115,6 +152,7 @@ export default function SignPage() {
 
   return (
     <div className="min-h-screen bg-muted-50/30 pb-24">
+      <PrototypeDisclosure />
       <header className="border-b border-brand-100 bg-white px-4 py-6">
         <div className="mx-auto max-w-4xl space-y-3">
           <Badge tone="subtle">{t("signature.demoLabel")}</Badge>

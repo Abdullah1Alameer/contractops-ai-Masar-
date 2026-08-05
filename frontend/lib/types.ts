@@ -390,6 +390,26 @@ export interface FlowdownContractsList {
   sub: FlowdownContractOption[];
 }
 
+export type DeliveryStatus = "pending" | "sending" | "sent" | "failed" | "cancelled";
+
+export interface DeliveryRow {
+  id: string;
+  message_type: string;
+  recipient: string;
+  subject: string;
+  contract_id: string;
+  review_request_id: string | null;
+  signature_request_id: string | null;
+  signer_id: string | null;
+  status: DeliveryStatus;
+  attempt_count: number;
+  provider_message_id: string | null;
+  safe_error_code: string | null;
+  created_at: string | null;
+  sent_at: string | null;
+  failed_at: string | null;
+}
+
 export type ReviewStatus =
   | "sent"
   | "opened"
@@ -431,12 +451,15 @@ export interface ReviewRequestRow {
   actionable?: boolean;
   terminal_decision?: string | null;
   next_allowed_actions?: string[];
+  delivery?: DeliveryRow | null;
+  delivery_history?: DeliveryRow[];
 }
 
 export interface SendReviewResponse {
   review_link: string;
   email: { subject: string; body: string; review_link: string };
   request: ReviewRequestRow;
+  delivery?: DeliveryRow | null;
 }
 
 export interface ReviewPortalPayload {
@@ -628,6 +651,9 @@ export interface SignatureSignerRow {
   declined_at?: string | null;
   decline_reason?: string | null;
   signature_type?: string | null;
+  delivery?: DeliveryRow | null;
+  eligible?: boolean;
+  signer_link?: string | null;
 }
 
 export interface SignatureRequestRow {
@@ -666,6 +692,7 @@ export interface SignatureBundleResponse {
   request: SignatureRequestRow | null;
   events: SignatureEventRow[];
   can_create?: boolean;
+  deliveries?: DeliveryRow[];
 }
 
 export interface SignatureSummaryKpis {

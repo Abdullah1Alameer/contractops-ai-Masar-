@@ -27,6 +27,7 @@ from .outbound_messages import (
     deliver_pending_attempt,
     enforce_resend_cooldown,
     hash_public_token,
+    latest_delivery,
     public_token_from_nonce,
     serialize_delivery,
 )
@@ -383,7 +384,16 @@ def create_request(
     emails = [build_invitation_email(contract, req, sr, t["signer_link"]) for sr, t in zip(signer_rows, tokens_out)]
     return {
         "request": serialize_request(req, db),
-        "signers": [serialize_signer_internal(s) for s in signer_rows],
+        "signers": [
+            serialize_signer_internal(
+                s,
+                db,
+                contract_id=req.contract_id,
+                signature_request_id=req.id,
+                request_status=req.status,
+            )
+            for s in signer_rows
+        ],
         "signer_links": tokens_out,
         "email_templates": emails,
     }
@@ -843,8 +853,32 @@ def build_invitation_email(contract: Contract, req: SignatureRequest, signer: Si
     }
 
 
-def serialize_signer_internal(s: SignatureSigner) -> dict:
-    return {
+# A signer can be resent/reached only once invited and while the request is still
+# open; earlier "waiting" (not-yet-invited) and terminal signer states never expose
+# delivery actions, matching `resend_signer`'s own eligibility guard.
+_RESENDABLE_SIGNER_STATUSES = frozenset({"invited", "opened"})
+
+
+def serialize_signer_internal(
+    s: SignatureSigner,
+    db: Session,
+    *,
+    contract_id,
+    signature_request_id,
+    request_status: str,
+) -> dict:
+    delivery = latest_delivery(
+        db,
+        contract_id=contract_id,
+        message_type=SIGNATURE_INVITATION_MESSAGE_TYPE,
+        signature_request_id=signature_request_id,
+        signer_id=s.id,
+    )
+    eligible = (
+        request_status not in TERMINAL_REQUEST_STATUSES
+        and s.status in _RESENDABLE_SIGNER_STATUSES
+    )
+    out = {
         "id": str(s.id),
         "signer_order": s.signer_order,
         "name": s.name,
@@ -856,7 +890,13 @@ def serialize_signer_internal(s: SignatureSigner) -> dict:
         "declined_at": _iso(s.declined_at),
         "decline_reason": s.decline_reason,
         "signature_type": s.signature_type,
+        "delivery": serialize_delivery(delivery),
+        "eligible": eligible,
+        "signer_link": (
+            signer_link(public_token_for_signer(s)) if eligible and s.token_nonce else None
+        ),
     }
+    return out
 
 
 def serialize_request(req: SignatureRequest, db: Session) -> dict:
@@ -881,7 +921,16 @@ def serialize_request(req: SignatureRequest, db: Session) -> dict:
         "certificate_file_url": req.certificate_file_url,
         "original_hash": req.original_hash,
         "signed_hash": req.signed_hash,
-        "signers": [serialize_signer_internal(s) for s in signers],
+        "signers": [
+            serialize_signer_internal(
+                s,
+                db,
+                contract_id=req.contract_id,
+                signature_request_id=req.id,
+                request_status=req.status,
+            )
+            for s in signers
+        ],
         "progress": {"completed": completed, "total": len(signers)},
         "is_stale": is_stale_version(req.version_id, req.contract_id, db),
         "version_id": str(req.version_id) if req.version_id else None,

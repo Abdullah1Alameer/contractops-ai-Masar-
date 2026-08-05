@@ -21,6 +21,8 @@ const cancelSignatureRequest = vi.fn();
 const fetchSignatureBundle = vi.fn();
 const downloadSignedPdf = vi.fn();
 const downloadSignatureCertificate = vi.fn();
+const resendSignatureSigner = vi.fn();
+const sendSignatureRequest = vi.fn();
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -34,8 +36,8 @@ vi.mock("@/lib/api", () => ({
   downloadSignatureCertificate: (...args: unknown[]) => downloadSignatureCertificate(...args),
   downloadSignedPdf: (...args: unknown[]) => downloadSignedPdf(...args),
   fetchSignatureBundle: (...args: unknown[]) => fetchSignatureBundle(...args),
-  resendSignatureSigner: vi.fn(),
-  sendSignatureRequest: vi.fn(),
+  resendSignatureSigner: (...args: unknown[]) => resendSignatureSigner(...args),
+  sendSignatureRequest: (...args: unknown[]) => sendSignatureRequest(...args),
 }));
 
 vi.mock("@/components/feedback/ToastProvider", () => ({
@@ -261,5 +263,139 @@ describe("SignaturePanel cancellation", () => {
     );
     await waitFor(() => expect(onLifecycleChange).toHaveBeenCalled());
     expect(toastSuccess).toHaveBeenCalledWith("تم إلغاء طلب التوقيع");
+  });
+});
+
+const SIGNER_ONE = "signer-1";
+const SIGNER_TWO = "signer-2";
+
+function orderedBundle() {
+  return {
+    request: {
+      id: REQUEST_ID,
+      contract_id: CONTRACT_ID,
+      provider: "simulated",
+      status: "sent",
+      subject: "Please sign",
+      message: null,
+      signing_order_enabled: true,
+      expires_at: "2026-12-01T00:00:00+00:00",
+      sent_at: "2026-08-01T09:00:00+00:00",
+      completed_at: null,
+      signed_file_url: null,
+      certificate_file_url: null,
+      signers: [
+        {
+          id: SIGNER_ONE,
+          signer_order: 1,
+          name: "Signer One",
+          email: "one@example.invalid",
+          role: "company_signatory",
+          status: "invited",
+          eligible: true,
+          signer_link: "https://demo.local/sign/first-signer-token",
+          delivery: {
+            id: "d1",
+            message_type: "signature_invitation",
+            recipient: "one@example.invalid",
+            subject: "Please sign",
+            contract_id: CONTRACT_ID,
+            review_request_id: null,
+            signature_request_id: REQUEST_ID,
+            signer_id: SIGNER_ONE,
+            status: "sent",
+            attempt_count: 1,
+            provider_message_id: "message-1",
+            safe_error_code: null,
+            created_at: "2026-08-01T09:00:00+00:00",
+            sent_at: "2026-08-01T09:00:01+00:00",
+            failed_at: null,
+          },
+        },
+        {
+          id: SIGNER_TWO,
+          signer_order: 2,
+          name: "Signer Two",
+          email: "two@example.invalid",
+          role: "client_signatory",
+          status: "waiting",
+          eligible: false,
+          signer_link: null,
+          delivery: null,
+        },
+      ],
+      progress: { completed: 0, total: 2 },
+      is_stale: false,
+    },
+    events: [],
+    can_create: false,
+  };
+}
+
+describe("SignaturePanel signer delivery and eligibility", () => {
+  it("shows persisted delivery status, attempts, and timestamp for the eligible signer only", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    renderPanel("ready_to_sign");
+
+    expect(await screen.findByText("تم الإرسال")).toBeTruthy();
+    expect(screen.getByText(/عدد المحاولات: 1/)).toBeTruthy();
+    expect(screen.getByText(/وقت الإرسال/)).toBeTruthy();
+  });
+
+  it("offers Retry and Copy Link only for the eligible signer, never for a future waiting signer", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    renderPanel("ready_to_sign");
+
+    await screen.findByText("تم الإرسال");
+    const resendButtons = screen.getAllByText("إعادة إرسال");
+    expect(resendButtons).toHaveLength(1);
+    const copyButtons = screen.getAllByText("نسخ رابط الموقّع");
+    expect(copyButtons).toHaveLength(1);
+  });
+
+  it("resends the eligible signer and reports a real notified success", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    resendSignatureSigner.mockResolvedValue({
+      signer_link: "https://demo.local/sign/first-signer-token",
+      token: "first-signer-token",
+      email: {},
+      delivery: { status: "sent" },
+    });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إعادة إرسال"));
+
+    await waitFor(() => expect(resendSignatureSigner).toHaveBeenCalledWith(REQUEST_ID, SIGNER_ONE));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("تم إرسال دعوة التوقيع"));
+  });
+
+  it("never reports a notified success when the resend delivery failed", async () => {
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    resendSignatureSigner.mockResolvedValue({
+      signer_link: "https://demo.local/sign/first-signer-token",
+      token: "first-signer-token",
+      email: {},
+      delivery: { status: "failed", safe_error_code: "smtp_connection_failed" },
+    });
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("إعادة إرسال"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("تعذّر إرسال دعوة التوقيع"));
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("copies the persisted signing link for the eligible signer", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    fetchSignatureBundle.mockResolvedValue(orderedBundle());
+    renderPanel("ready_to_sign");
+
+    fireEvent.click(await screen.findByText("نسخ رابط الموقّع"));
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("https://demo.local/sign/first-signer-token")
+    );
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("تم النسخ"));
   });
 });

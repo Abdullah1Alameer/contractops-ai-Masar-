@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import CreateSignatureDialog from "@/components/CreateSignatureDialog";
 import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import { useToast } from "@/components/feedback/ToastProvider";
+import { DeliveryStatusBadge } from "@/components/SendForReviewDialog";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
@@ -103,9 +104,16 @@ export default function SignaturePanel({
       onConfirm: async () => {
         setPending("send");
         try {
-          await sendSignatureRequest(req.id);
+          const out = await sendSignatureRequest(req.id);
           load();
-          toast.success(t("signature.sent"));
+          // The request/link is always persisted at this point; only the invitation
+          // email itself may have failed, so success must reflect actual delivery.
+          const failed = (out.deliveries ?? []).some((d) => d.status === "failed");
+          if (failed) {
+            toast.error(t("signature.deliveryFailed"));
+          } else {
+            toast.success(t("signature.sent"));
+          }
           await onLifecycleChange?.();
         } catch (error) {
           toast.error(apiErrorCode(error, t("common.error")));
@@ -302,13 +310,23 @@ export default function SignaturePanel({
               try {
                 const r = await resendSignatureSigner(req.id, signerId);
                 setLastLink(r.signer_link);
-                toast.success(t("signature.resend"));
+                // Persist honesty about delivery: a resend that fails to reach the
+                // signer must never be reported as a successful send.
+                if (r.delivery?.status === "failed") {
+                  toast.error(t("signature.deliveryFailed"));
+                } else {
+                  toast.success(t("signature.deliverySent"));
+                }
                 load();
               } catch (error) {
                 toast.error(apiErrorCode(error, t("common.error")));
               } finally {
                 setPending(null);
               }
+            }}
+            onCopyLink={async (link) => {
+              await navigator.clipboard.writeText(link);
+              toast.success(t("common.copied"));
             }}
           />
         </>
@@ -339,11 +357,13 @@ function RequestView({
   t,
   busy,
   onResend,
+  onCopyLink,
 }: {
   req: SignatureRequestRow;
   t: (k: TKey) => string;
   busy: boolean;
   onResend: (signerId: string) => void;
+  onCopyLink: (link: string) => void;
 }) {
   return (
     <Card>
@@ -362,14 +382,45 @@ function RequestView({
         </p>
         <ol className="space-y-2">
           {req.signers.map((s) => (
-            <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-sm">
-              <span>
-                {s.signer_order}. {s.name} — {t(`signature.role.${s.role}` as TKey)} — {s.status}
-              </span>
-              {s.status !== "signed" && (
-                <Button variant="secondary" size="sm" disabled={busy} onClick={() => onResend(s.id)}>
-                  {t("signature.resend")}
-                </Button>
+            <li key={s.id} className="flex flex-col gap-2 rounded border p-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  {s.signer_order}. {s.name} — {t(`signature.role.${s.role}` as TKey)} — {t(statusKey(s.status))}
+                </span>
+                {/* Only the currently eligible (invited/opened) signer exposes Retry
+                    and Copy Link — future, not-yet-invited signers get no invite
+                    action, matching the resend endpoint's own eligibility guard. */}
+                {s.eligible && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" disabled={busy} onClick={() => onResend(s.id)}>
+                      {t("signature.resend")}
+                    </Button>
+                    {s.signer_link && (
+                      <Button variant="secondary" size="sm" disabled={busy} onClick={() => onCopyLink(s.signer_link!)}>
+                        {t("signature.copyLink")}
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+              {s.delivery && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                  <DeliveryStatusBadge status={s.delivery.status} />
+                  <span>
+                    {t("delivery.attempts")}: {s.delivery.attempt_count}
+                  </span>
+                  {s.delivery.status === "sent" && s.delivery.sent_at && (
+                    <span>
+                      {t("delivery.sentAt")}: {s.delivery.sent_at.slice(0, 19)}
+                    </span>
+                  )}
+                  {s.delivery.status === "failed" && (
+                    <span>
+                      {t("delivery.failedAt")}: {s.delivery.failed_at?.slice(0, 19) ?? "—"}
+                      {s.delivery.safe_error_code ? ` · ${s.delivery.safe_error_code}` : ""}
+                    </span>
+                  )}
+                </div>
               )}
             </li>
           ))}

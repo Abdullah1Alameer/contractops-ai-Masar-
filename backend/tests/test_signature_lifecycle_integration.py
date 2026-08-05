@@ -261,6 +261,51 @@ def test_failed_delivery_preserves_request_link_and_retry_reuses_it(signature_db
     assert db.query(OutboundMessage).filter_by(signer_id=signer.id).count() == 2
 
 
+def test_bundle_exposes_persisted_signer_delivery_only_for_eligible_signer(
+    signature_db, monkeypatch
+):
+    db, create_contract = signature_db
+    contract, _ = create_contract()
+    monkeypatch.setattr(
+        "app.services.outbound_messages.send_email",
+        lambda **_kwargs: EmailDeliveryResult("sent", "message-id", None, datetime.now(timezone.utc)),
+    )
+    client = TestClient(app)
+    created = _create(client, contract.id)
+    request_id = created["request"]["id"]
+    first_token, second_token = [row["token"] for row in created["signer_links"]]
+    _send(client, request_id)
+
+    bundle = client.get(f"/api/contracts/{contract.id}/signature-request", headers=AUTH).json()
+    first, second = bundle["request"]["signers"]
+
+    assert first["status"] == "invited"
+    assert first["eligible"] is True
+    assert first["delivery"]["status"] == "sent"
+    assert first["delivery"]["attempt_count"] == 1
+    assert first["delivery"]["sent_at"] is not None
+    assert first["signer_link"] is not None and first["signer_link"].endswith(first_token)
+
+    assert second["status"] == "waiting"
+    assert second["eligible"] is False
+    assert second["delivery"] is None
+    assert second["signer_link"] is None
+    assert second_token not in str(bundle)
+
+    assert _sign(client, first_token, "Signer One").status_code == 200
+
+    refreshed = client.get(f"/api/contracts/{contract.id}/signature-request", headers=AUTH).json()
+    first_after, second_after = refreshed["request"]["signers"]
+    assert first_after["status"] == "signed"
+    assert first_after["eligible"] is False
+    assert first_after["signer_link"] is None
+    assert first_after["delivery"]["status"] == "sent"
+    assert second_after["status"] == "invited"
+    assert second_after["eligible"] is True
+    assert second_after["delivery"]["status"] == "sent"
+    assert second_after["signer_link"] is not None and second_after["signer_link"].endswith(second_token)
+
+
 def test_ordered_signing_persists_partial_then_signed_without_auto_activation(
     signature_db, monkeypatch
 ):

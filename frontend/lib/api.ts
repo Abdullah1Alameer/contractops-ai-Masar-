@@ -241,6 +241,16 @@ export async function fetchContractReviews(contractId: string) {
   return api<import("./types").ReviewRequestRow[]>(`/api/contracts/${contractId}/reviews`);
 }
 
+export async function resendContractReview(contractId: string, reviewId: string) {
+  const res = await apiJson<import("./types").SendReviewResponse>(
+    `/api/contracts/${contractId}/reviews/${reviewId}/resend`,
+    "POST",
+    {}
+  );
+  invalidateContract(contractId);
+  return res;
+}
+
 export async function fetchReviewsSummary() {
   return api<{ items: import("./types").ReviewRequestRow[] }>("/api/reviews/summary");
 }
@@ -402,11 +412,12 @@ export async function activateSignatureRequest(requestId: string, reason: string
 }
 
 export async function resendSignatureSigner(requestId: string, signerId: string) {
-  return apiJson<{ signer_link: string; token: string; email: Record<string, string> }>(
-    `/api/signature-requests/${requestId}/resend/${signerId}`,
-    "POST",
-    {}
-  );
+  return apiJson<{
+    signer_link: string;
+    token: string;
+    email: Record<string, string>;
+    delivery?: import("./types").DeliveryRow | null;
+  }>(`/api/signature-requests/${requestId}/resend/${signerId}`, "POST", {});
 }
 
 export async function fetchSignatureSummary() {
