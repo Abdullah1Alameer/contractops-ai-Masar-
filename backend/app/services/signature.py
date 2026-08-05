@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import re
 import secrets
 import uuid
@@ -19,6 +18,12 @@ from .lifecycle import (
     can_create_signature,
     set_stage,
     transition_stage,
+)
+from .outbound_messages import (
+    TokenMaterial,
+    create_token_material,
+    hash_public_token,
+    public_token_from_nonce,
 )
 from .signature_pdf import build_certificate_pdf, build_signed_pdf, original_bytes, sha256_hex
 from .storage import storage
@@ -48,11 +53,21 @@ def _iso(dt) -> str | None:
 
 
 def hash_token(raw: str) -> str:
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return hash_public_token(raw)
 
 
 def new_signer_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def generate_token_material() -> TokenMaterial:
+    return create_token_material()
+
+
+def public_token_for_signer(signer: SignatureSigner) -> str:
+    if not signer.token_nonce:
+        raise ValueError("signer_token_not_reproducible")
+    return public_token_from_nonce(signer.token_nonce)
 
 
 def signer_link(token: str) -> str:
@@ -193,7 +208,7 @@ def create_request(
     signer_rows: list[SignatureSigner] = []
     tokens_out: list[dict] = []
     for s in sorted(signers, key=lambda x: x["order"]):
-        raw = new_signer_token()
+        material = generate_token_material()
         row = SignatureSigner(
             id=uuid.uuid4(),
             signature_request_id=req.id,
@@ -201,7 +216,8 @@ def create_request(
             name=s["name"].strip(),
             email=s["email"].strip(),
             role=s.get("role", "other"),
-            token_hash=hash_token(raw),
+            token_hash=material.token_hash,
+            token_nonce=material.nonce,
             status="waiting",
         )
         db.add(row)
@@ -212,8 +228,8 @@ def create_request(
                 "order": row.signer_order,
                 "name": row.name,
                 "email": row.email,
-                "signer_link": signer_link(raw),
-                "token": raw,
+                "signer_link": signer_link(material.public_token),
+                "token": material.public_token,
             }
         )
 
@@ -296,8 +312,13 @@ def resend_signer(request_id, signer_id, db: Session, *, actor: str = "demo") ->
     signer = db.get(SignatureSigner, signer_id)
     if signer is None or signer.signature_request_id != req.id:
         raise ValueError("not_found")
-    raw = new_signer_token()
-    signer.token_hash = hash_token(raw)
+    if signer.token_nonce:
+        raw = public_token_for_signer(signer)
+    else:
+        material = generate_token_material()
+        signer.token_nonce = material.nonce
+        signer.token_hash = material.token_hash
+        raw = material.public_token
     link = signer_link(raw)
     contract = db.get(Contract, req.contract_id)
     email = build_invitation_email(contract, req, signer, link) if contract else {}

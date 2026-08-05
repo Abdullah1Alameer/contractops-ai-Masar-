@@ -39,13 +39,33 @@ def test_token_hash_unique():
     assert len(a) == 64
 
 
+def test_signer_token_is_reproducible_and_stored_as_hash(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "test-portal-secret")
+
+    material = sig_svc.generate_token_material()
+    signer = SimpleNamespace(token_nonce=material.nonce)
+
+    assert sig_svc.public_token_for_signer(signer) == material.public_token
+    assert sig_svc.hash_token(material.public_token) == material.token_hash
+    assert material.public_token != material.nonce
+
+
 @patch("app.services.signature.storage")
 @patch("app.services.signature.get_active_request")
 @patch("app.services.signature.transition_stage")
 @patch("app.services.signature.log_activity")
 @patch("app.services.signature.log_sig_event")
 @patch("app.services.signature.original_bytes")
-def test_create_moves_awaiting(mock_orig, mock_log, mock_la, mock_stage, mock_active, mock_storage):
+def test_create_moves_awaiting(
+    mock_orig,
+    mock_log,
+    mock_la,
+    mock_stage,
+    mock_active,
+    mock_storage,
+    monkeypatch,
+):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "test-portal-secret")
     mock_active.return_value = None
     mock_orig.return_value = b"%PDF-1.4 demo"
     mock_storage.save.return_value = "filekey"

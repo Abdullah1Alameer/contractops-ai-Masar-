@@ -26,6 +26,12 @@ from . import approvals
 from .deadlines import deadline_summary, list_deadlines_for_contract
 from .flowdown import list_flowdown_for_pair
 from .lifecycle import LifecycleEvent, LifecycleService, TransitionResult
+from .outbound_messages import (
+    TokenMaterial,
+    create_token_material,
+    hash_public_token,
+    public_token_from_nonce,
+)
 from .payments import list_payment_milestones_for_contract, payments_summary
 from . import versions as ver_svc
 
@@ -52,6 +58,22 @@ def _raise_review_error(status_code: int, code: str, **payload) -> None:
 
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def generate_token_material() -> TokenMaterial:
+    return create_token_material()
+
+
+def hash_token(public_token: str) -> str:
+    return hash_public_token(public_token)
+
+
+def public_token_for_request(req: ReviewRequest) -> str:
+    if req.token_nonce:
+        return public_token_from_nonce(req.token_nonce)
+    if req.token:
+        return req.token
+    _raise_review_error(500, "review_token_unavailable")
 
 
 def _utcnow() -> datetime:
@@ -538,8 +560,9 @@ def serialize_review_request(req: ReviewRequest, db: Session, *, include_token: 
         "next_allowed_actions": next_allowed_actions,
     }
     if include_token:
-        out["token"] = req.token
-        out["review_link"] = review_link(req.token)
+        public_token = public_token_for_request(req)
+        out["token"] = public_token
+        out["review_link"] = review_link(public_token)
     return out
 
 
@@ -587,15 +610,17 @@ def create_review_request(
         if active is not None:
             _raise_review_error(409, "review_already_active")
 
-        token = generate_token()
-        while db.query(ReviewRequest).filter_by(token=token).first():
-            token = generate_token()
+        material = generate_token_material()
+        while db.query(ReviewRequest).filter_by(token_hash=material.token_hash).first():
+            material = generate_token_material()
 
         req = ReviewRequest(
             id=uuid.uuid4(),
             contract_id=contract.id,
             version_id=current.id,
-            token=token,
+            token=None,
+            token_nonce=material.nonce,
+            token_hash=material.token_hash,
             recipient_name=clean_name,
             recipient_email=clean_email,
             sender_name=sender_name,
@@ -645,7 +670,16 @@ def create_review_request(
 
 
 def get_request_by_token(token: str, db: Session) -> ReviewRequest | None:
-    return db.query(ReviewRequest).filter_by(token=token).first()
+    return (
+        db.query(ReviewRequest)
+        .filter(
+            or_(
+                ReviewRequest.token_hash == hash_token(token),
+                ReviewRequest.token == token,
+            )
+        )
+        .first()
+    )
 
 
 def build_public_payload(req: ReviewRequest, db: Session) -> dict:

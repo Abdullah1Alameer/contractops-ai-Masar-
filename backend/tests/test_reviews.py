@@ -12,6 +12,17 @@ def test_generate_token_unique():
     assert len(a) >= 32
 
 
+def test_review_token_is_reproducible_and_stored_as_hash(monkeypatch):
+    monkeypatch.setenv("PORTAL_TOKEN_SECRET", "test-portal-secret")
+
+    material = rev.generate_token_material()
+    request = SimpleNamespace(token_nonce=material.nonce)
+
+    assert rev.public_token_for_request(request) == material.public_token
+    assert rev.hash_token(material.public_token) == material.token_hash
+    assert material.public_token != material.nonce
+
+
 def test_can_respond_open_states():
     assert rev.can_respond(SimpleNamespace(status="sent"))
     assert rev.can_respond(SimpleNamespace(status="opened"))
