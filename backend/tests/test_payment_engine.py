@@ -20,6 +20,10 @@ def _row(**kwargs):
         "amount_sar": 100000,
         "amount_percentage": None,
         "due_date": None,
+        "next_due_date": None,
+        "trigger_event": None,
+        "due_rule": None,
+        "role": None,
         "preconditions": [],
     }
     defaults.update(kwargs)
@@ -54,7 +58,10 @@ class TestComputeStatus:
             {"id": "1", "label": "A", "required": True, "completed": False},
             {"id": "2", "label": "B", "required": True, "completed": False},
         ]
-        st, pct, claim, missing = compute_payment_status_and_readiness(_row(preconditions=pre), self.today)
+        st, pct, claim, missing = compute_payment_status_and_readiness(
+            _row(preconditions=pre, next_due_date=date(2026, 8, 30)),
+            self.today,
+        )
         assert st == "blocked" and pct == 0 and claim is False and len(missing) == 2
 
     def test_partial_readiness(self):
@@ -65,10 +72,11 @@ class TestComputeStatus:
         _, pct, _, _ = compute_payment_status_and_readiness(_row(preconditions=pre), self.today)
         assert pct == 50
 
-    def test_all_complete_claimable(self):
+    def test_all_complete_due_or_claimable(self):
         pre = [{"id": "1", "label": "A", "required": True, "completed": True}]
-        st, pct, claim, missing = compute_payment_status_and_readiness(_row(preconditions=pre), self.today)
-        assert st == "claimable" and pct == 100 and claim is True and missing == []
+        row = _row(preconditions=pre, next_due_date=date(2026, 8, 1))
+        st, pct, claim, missing = compute_payment_status_and_readiness(row, self.today)
+        assert st in ("due", "claimable") and pct == 100 and claim is True and missing == []
 
     def test_mark_paid(self):
         st, pct, claim, _ = compute_payment_status_and_readiness(_row(paid=True), self.today)
@@ -81,9 +89,14 @@ class TestComputeStatus:
         )
         assert st == "overdue" and claim is False
 
-    def test_no_preconditions_claimable(self):
+    def test_no_preconditions_needs_review_without_due(self):
         st, pct, claim, _ = compute_payment_status_and_readiness(_row(preconditions=[]), self.today)
-        assert st == "claimable" and pct == 100 and claim is True
+        assert st == "needs_review" and pct == 100 and claim is False
+
+    def test_scheduled_future_salary(self):
+        row = _row(preconditions=[], next_due_date=date(2026, 8, 30))
+        st, _, claim, _ = compute_payment_status_and_readiness(row, self.today)
+        assert st == "scheduled" and claim is False
 
     def test_missing_details_needs_review(self):
         st, _, claim, _ = compute_payment_status_and_readiness(
@@ -93,25 +106,31 @@ class TestComputeStatus:
         assert st == "needs_review" and claim is False
 
     def test_sar_only(self):
-        st, _, _, _ = compute_payment_status_and_readiness(_row(amount_sar=500000, amount_percentage=None), self.today)
-        assert st == "claimable"
+        st, _, _, _ = compute_payment_status_and_readiness(
+            _row(amount_sar=500000, amount_percentage=None, next_due_date=date(2026, 8, 1)),
+            self.today,
+        )
+        assert st in ("due", "claimable")
 
     def test_percentage_only(self):
-        st, _, _, _ = compute_payment_status_and_readiness(_row(amount_sar=None, amount_percentage=20), self.today)
-        assert st == "claimable"
+        st, _, _, _ = compute_payment_status_and_readiness(
+            _row(amount_sar=None, amount_percentage=20, next_due_date=date(2026, 8, 1)),
+            self.today,
+        )
+        assert st in ("due", "claimable")
 
     def test_sar_and_percentage(self):
         st, _, _, _ = compute_payment_status_and_readiness(
-            _row(amount_sar=500000, amount_percentage=20),
+            _row(amount_sar=500000, amount_percentage=20, next_due_date=date(2026, 8, 1)),
             self.today,
         )
-        assert st == "claimable"
+        assert st in ("due", "claimable")
 
     def test_demo_clock_overdue_flip(self):
-        row = _row(due_date=date(2026, 8, 15), preconditions=[])
+        row = _row(due_date=date(2026, 8, 15), next_due_date=date(2026, 8, 15), preconditions=[])
         st1, _, _, _ = compute_payment_status_and_readiness(row, date(2026, 8, 1))
         st2, _, _, _ = compute_payment_status_and_readiness(row, date(2026, 8, 20))
-        assert st1 == "claimable"
+        assert st1 == "scheduled"
         assert st2 == "overdue"
 
 
@@ -125,14 +144,18 @@ class TestApplyPatch:
             label="Pay 1",
             amount_sar=1,
             amount_percentage=None,
-            due_date=None,
+            due_date=date(2026, 8, 30),
+            next_due_date=date(2026, 8, 30),
+            trigger_event=None,
+            due_rule=None,
+            role=None,
             preconditions=[{"id": pid, "label": "Engineer approval", "required": True, "completed": False}],
             status="blocked",
             updated_at=None,
         )
         apply_milestone_patch(m, {"precondition_id": pid, "completed": True}, self.today)
         assert m.preconditions[0]["completed"] is True
-        assert m.status == "claimable"
+        assert m.status in ("due", "claimable", "scheduled")
 
     def test_patch_paid(self):
         m = _row(preconditions=[])

@@ -24,6 +24,84 @@ body {
     background-size: 200% 100%;
     @apply motion-safe:animate-shimmer;
   }
+
+  .chip {
+    @apply inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700;
+  }
+
+  .bidi-plaintext {
+    unicode-bidi: plaintext;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .chip-active {
+    @apply border-brand-600/20 bg-brand-50 text-brand-800;
+  }
+
+  .data-cell {
+    @apply align-middle text-start;
+  }
+
+  .section-title {
+    @apply text-xs font-bold uppercase tracking-wide text-gray-400;
+  }
+
+  .hairline-b {
+    @apply border-gray-100;
+  }
+
+  .surface-card {
+    @apply rounded-card border border-neutral-200/80 bg-white shadow-elevation-1 motion-safe:transition-shadow motion-safe:duration-200 hover:shadow-elevation-2;
+  }
+
+  .surface-panel {
+    @apply rounded-xl2 border border-neutral-200/60 bg-white shadow-panel;
+  }
+
+  .surface-glass {
+    @apply rounded-card border border-white/50 bg-white/70 shadow-elevation-2 backdrop-blur-xl dark:border-neutral-700/80 dark:bg-neutral-900/70;
+  }
+
+  .hero-gradient {
+    @apply relative overflow-hidden rounded-xl2 border border-brand-100/60 bg-gradient-to-br from-brand-50/80 via-white to-info-50/40 dark:border-brand-900/50 dark:from-neutral-900 dark:via-neutral-900 dark:to-brand-900/20;
+  }
+
+  .divider {
+    @apply h-px w-full bg-neutral-200;
+  }
+
+  .kbd {
+    @apply rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 font-mono text-[10px] text-neutral-600;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700;
+  }
+
+  .pill-dot {
+    @apply h-1.5 w-1.5 rounded-full bg-brand-600;
+  }
+
+  .text-title {
+    @apply text-2xl font-bold tracking-tight text-neutral-900 md:text-3xl;
+  }
+
+  .text-eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-neutral-500;
+  }
+
+  .text-hint {
+    @apply text-sm text-neutral-500;
+  }
+
+  .link-quiet {
+    @apply text-sm font-medium text-neutral-600 hover:text-brand-700 motion-safe:transition-colors;
+  }
+
+  .link-strong {
+    @apply text-sm font-semibold text-brand-700 hover:text-brand-800 hover:underline;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,14 +1,16 @@
 "use client";
+import dynamic from "next/dynamic";
 import { useState } from "react";
 
 import FlowdownFindings from "@/components/FlowdownFindings";
 import FlowdownPicker, { FlowdownRunningBanner } from "@/components/FlowdownPicker";
 import FlowdownSummary from "@/components/FlowdownSummary";
-import SourceViewer from "@/components/SourceViewer";
 import Badge from "@/components/ui/Badge";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { useI18n } from "@/lib/i18n";
 import type { FlowdownResponse, SourceTarget } from "@/lib/types";
+
+const SourceViewer = dynamic(() => import("@/components/SourceViewer"), { ssr: false });
 
 export default function FlowdownPage() {
   const { t } = useI18n();

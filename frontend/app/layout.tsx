@@ -3,7 +3,7 @@ import { IBM_Plex_Sans_Arabic } from "next/font/google";
 
 import { ConfirmDialogProvider } from "@/components/feedback/ConfirmDialog";
 import { ToastProvider } from "@/components/feedback/ToastProvider";
-import Header from "@/components/Header";
+import AppShell from "@/components/shell/AppShell";
 import { I18nProvider } from "@/lib/i18n";
 
 import "./globals.css";
@@ -15,7 +15,7 @@ const plex = IBM_Plex_Sans_Arabic({
 
 export const metadata: Metadata = {
   title: "ContractOps AI",
-  description: "إدارة عقود الباطن بالذكاء الاصطناعي",
+  description: "منصة عمليات العقود بالذكاء الاصطناعي — جميع القطاعات",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -25,8 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <I18nProvider>
           <ToastProvider>
             <ConfirmDialogProvider>
-              <Header />
-              <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+              <AppShell>{children}</AppShell>
             </ConfirmDialogProvider>
           </ToastProvider>
         </I18nProvider>

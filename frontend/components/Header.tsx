@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import DemoRoleSwitcher from "@/components/DemoRoleSwitcher";
 import SegmentedControl from "@/components/ui/SegmentedControl";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -47,7 +48,9 @@ export default function Header() {
             })}
           </nav>
         </div>
-        <SegmentedControl
+        <div className="flex flex-wrap items-center gap-4">
+          <DemoRoleSwitcher />
+          <SegmentedControl
           value={lang}
           options={[
             { value: "ar", label: t("lang.ar") },
@@ -55,6 +58,7 @@ export default function Header() {
           ]}
           onChange={setLang}
         />
+        </div>
       </div>
     </header>
   );

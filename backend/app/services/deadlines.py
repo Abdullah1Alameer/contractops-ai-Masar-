@@ -8,6 +8,13 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from ..models import Clause, Contract, Deadline, DemoSettings, Event, Extraction, Obligation
+from .date_semantics import sync_contract_date_semantics
+from .temporal_inference import (
+    infer_event_type_from_notice,
+    infer_responsible_party,
+    merge_temporal_rule,
+)
+from .temporal_rules import resolve_temporal_rule
 
 NOTICE_TIME_BAR_TYPES = frozenset({"notice_deadline", "submission_deadline"})
 
@@ -97,6 +104,7 @@ def build_deadlines_for_contract(contract_id, db: Session) -> list[Deadline]:
     if contract is None:
         raise ValueError("contract_not_found")
 
+    sync_contract_date_semantics(contract, db)
     today = get_demo_today(db)
     db.query(Deadline).filter(
         Deadline.contract_id == contract_id,
@@ -112,7 +120,7 @@ def build_deadlines_for_contract(contract_id, db: Session) -> list[Deadline]:
     rows: list[Deadline] = []
 
     def add_row(**kwargs):
-        dl_type = kwargs["type"]
+        dl_type = kwargs.get("type") or "notice_deadline"
         dl_date = kwargs.get("deadline_date")
         needs = kwargs.get("needs_review", False)
         sev = _snapshot_severity(dl_date, today, dl_type, needs)
@@ -129,35 +137,43 @@ def build_deadlines_for_contract(contract_id, db: Session) -> list[Deadline]:
     if contract.end_date:
         add_row(
             type="contract_expiry",
+            event_type="contract_expiry",
             title="Contract expiry",
             label="Contract expiry",
             description="Contractual completion / expiry date.",
             deadline_date=contract.end_date,
             source_trigger_date=contract.end_date,
+            status="scheduled",
             needs_review=False,
         )
     if contract.bond_expiry:
         add_row(
             type="bond_expiry",
+            event_type="bond_expiry",
             title="Bond expiry",
             label="Bond expiry",
             description="Performance / bank bond expiry.",
             deadline_date=contract.bond_expiry,
             source_trigger_date=contract.bond_expiry,
+            status="scheduled",
             needs_review=False,
         )
     if contract.warranty_end:
         add_row(
             type="warranty_expiry",
+            event_type="warranty_expiry",
             title="Warranty expiry",
             label="Warranty expiry",
             description="End of warranty period.",
             deadline_date=contract.warranty_end,
             source_trigger_date=contract.warranty_end,
+            status="scheduled",
             needs_review=False,
         )
 
     for item in notices:
+        if not isinstance(item, dict):
+            continue
         purpose = item.get("purpose") or "Notice period"
         quote = item.get("quote") or ""
         days = item.get("days")
@@ -170,106 +186,71 @@ def build_deadlines_for_contract(contract_id, db: Session) -> list[Deadline]:
 
         clause_id = _clause_uuid(item)
         conf = item.get("confidence")
-        trigger = classify_notice_trigger(purpose, quote)
-        desc = f"Notice: {purpose} ({days_int} days)."
+        clause = db.get(Clause, clause_id) if clause_id else None
+        full_text = f"{quote} {clause.quote if clause else ''}"
+        item_for_rule = {**item, "quote": full_text}
+        rule = merge_temporal_rule(item_for_rule)
+        if rule.get("offset_value") is None:
+            rule["offset_value"] = days_int
+
+        event_type = infer_event_type_from_notice(item, rule)
+        termination_only = event_type == "settlement_after_termination"
+        resolved = resolve_temporal_rule(
+            contract,
+            rule,
+            events,
+            today,
+            termination_event_only=termination_only,
+        )
+        tr = resolved.get("temporal_rule") or rule
+        computed = resolved.get("computed_date")
+        base = resolved.get("base_date")
+        needs = resolved.get("needs_review", False)
+        review_reason = resolved.get("review_reason")
+        dl_status = resolved.get("status") or "needs_review"
+
+        if termination_only and computed is None and not events:
+            dl_status = "inactive"
+            needs = False
+            review_reason = "awaiting_trigger"
+
         title = purpose[:120]
+        desc = resolved.get("calculation_explanation") or f"Notice: {purpose} ({days_int} days)."
+        dl_type = "notice_deadline"
+        if event_type in ("settlement_after_contract_end", "settlement_after_termination"):
+            dl_type = "payment_deadline"
 
-        if trigger == "before_expiry":
-            if contract.end_date:
-                dl_date = contract.end_date - timedelta(days=days_int)
-                add_row(
-                    type="notice_deadline",
-                    title=title,
-                    label=title,
-                    description=desc,
-                    deadline_date=dl_date,
-                    source_trigger_date=contract.end_date,
-                    notice_period_days=days_int,
-                    needs_review=False,
-                    review_reason=None,
-                    source_clause_id=clause_id,
-                    confidence=conf,
-                    responsible_party=_responsible_for_clause(db, contract_id, clause_id),
-                )
-            else:
-                add_row(
-                    type="notice_deadline",
-                    title=title,
-                    label=title,
-                    description=desc,
-                    deadline_date=None,
-                    notice_period_days=days_int,
-                    needs_review=True,
-                    review_reason="no_contract_end_date",
-                    source_clause_id=clause_id,
-                    confidence=conf,
-                    responsible_party=_responsible_for_clause(db, contract_id, clause_id),
-                )
-            continue
-
-        if trigger == "after_event":
-            if events:
-                for ev in events:
-                    dl_date = ev.event_date + timedelta(days=days_int)
-                    add_row(
-                        type="notice_deadline",
-                        title=f"{title} ({ev.type})",
-                        label=title,
-                        description=f"{desc} Trigger: {ev.type} on {ev.event_date.isoformat()}.",
-                        deadline_date=dl_date,
-                        source_trigger_date=ev.event_date,
-                        notice_period_days=days_int,
-                        needs_review=False,
-                        source_clause_id=clause_id,
-                        confidence=conf,
-                        responsible_party=_responsible_for_clause(db, contract_id, clause_id),
-                        triggered_by_event_id=ev.id,
-                    )
-            else:
-                add_row(
-                    type="notice_deadline",
-                    title=title,
-                    label=title,
-                    description=desc,
-                    deadline_date=None,
-                    notice_period_days=days_int,
-                    needs_review=True,
-                    review_reason="no_event_yet",
-                    source_clause_id=clause_id,
-                    confidence=conf,
-                    responsible_party=_responsible_for_clause(db, contract_id, clause_id),
-                )
-            continue
-
-        if trigger == "payment_window":
-            add_row(
-                type="payment_deadline",
-                title=title,
-                label=title,
-                description=desc,
-                deadline_date=None,
-                notice_period_days=days_int,
-                needs_review=True,
-                review_reason="no_invoice_yet",
-                source_clause_id=clause_id,
-                confidence=conf,
-                responsible_party=_responsible_for_clause(db, contract_id, clause_id),
-            )
-            continue
+        st_sev, sev, _, _ = compute_status_and_severity(
+            computed if isinstance(computed, date) else None,
+            today,
+            dl_type,
+            needs or computed is None,
+        )
+        if dl_status == "inactive":
+            st_sev = "needs_review"
+            sev = "info"
 
         add_row(
-            type="notice_deadline",
+            type=dl_type,
+            event_type=event_type,
             title=title,
             label=title,
             description=desc,
-            deadline_date=None,
+            deadline_date=computed if isinstance(computed, date) else None,
+            source_trigger_date=base if isinstance(base, date) else None,
             notice_period_days=days_int,
-            needs_review=True,
-            review_reason="trigger_unresolved",
+            needs_review=needs or (computed is None and dl_status != "inactive"),
+            review_reason=review_reason,
             source_clause_id=clause_id,
             confidence=conf,
-            responsible_party=_responsible_for_clause(db, contract_id, clause_id),
+            responsible_party=item.get("responsible_party") or infer_responsible_party(item, rule),
+            temporal_rule=tr,
+            condition_key=tr.get("condition_text"),
+            calculation_explanation=resolved.get("calculation_explanation"),
+            calculation_explanation_ar=resolved.get("calculation_explanation_ar"),
+            status=dl_status if dl_status != "inactive" else "inactive",
         )
+        rows[-1].severity = sev
 
     db.flush()
     return rows
@@ -279,6 +260,13 @@ def serialize_deadline(d: Deadline, today: date, clause: Clause | None, extr_ite
     status, severity, days_remaining, time_barred = compute_status_and_severity(
         d.deadline_date, today, d.type or "other", d.needs_review
     )
+    if d.status == "inactive":
+        status = "inactive"
+        severity = "info"
+        days_remaining = None
+        time_barred = False
+    elif d.status:
+        status = d.status
     verified = bool(clause) and extr_item and extr_item.get("verified", True)
     quote = clause.quote if clause else (extr_item or {}).get("quote")
     clause_ref = clause.clause_ref if clause else (extr_item or {}).get("clause_ref")
@@ -291,19 +279,30 @@ def serialize_deadline(d: Deadline, today: date, clause: Clause | None, extr_ite
         "id": str(d.id),
         "contract_id": str(d.contract_id),
         "type": d.type,
+        "event_type": d.event_type,
         "title": d.title or d.label,
         "description": d.description,
         "event_date": d.deadline_date.isoformat() if d.deadline_date else None,
         "deadline_date": d.deadline_date.isoformat() if d.deadline_date else None,
         "source_trigger_date": d.source_trigger_date.isoformat() if d.source_trigger_date else None,
+        "base_date": d.source_trigger_date.isoformat() if d.source_trigger_date else None,
+        "base_date_type": (d.temporal_rule or {}).get("base_date_type") if isinstance(d.temporal_rule, dict) else None,
+        "direction": (d.temporal_rule or {}).get("direction") if isinstance(d.temporal_rule, dict) else None,
+        "offset_value": (d.temporal_rule or {}).get("offset_value") if isinstance(d.temporal_rule, dict) else d.notice_period_days,
+        "offset_unit": (d.temporal_rule or {}).get("offset_unit") if isinstance(d.temporal_rule, dict) else "calendar_days",
+        "computed_date": d.deadline_date.isoformat() if d.deadline_date else None,
         "notice_period_days": d.notice_period_days,
         "days_remaining": days_remaining,
         "severity": severity,
-        "status": status,
+        "status": d.status or status,
         "time_barred": time_barred,
         "needs_review": d.needs_review,
         "review_reason": d.review_reason,
         "responsible_party": d.responsible_party,
+        "calculation_explanation": d.calculation_explanation,
+        "calculation_explanation_ar": d.calculation_explanation_ar,
+        "temporal_rule": d.temporal_rule,
+        "condition_text": d.condition_key,
         "clause_ref": clause_ref,
         "quote": quote,
         "page": page,
@@ -311,6 +310,15 @@ def serialize_deadline(d: Deadline, today: date, clause: Clause | None, extr_ite
         "verified": verified and char_start is not None and char_end is not None,
         "char_start": char_start,
         "char_end": char_end,
+        "source": {
+            "clause_ref": clause_ref,
+            "quote": quote,
+            "page": page,
+            "char_start": char_start,
+            "char_end": char_end,
+            "confidence": round(conf, 2) if conf is not None else None,
+            "verified": verified and char_start is not None and char_end is not None,
+        },
         "source_clause_id": str(d.source_clause_id) if d.source_clause_id else None,
         "triggered_by_event_id": str(d.triggered_by_event_id) if d.triggered_by_event_id else None,
         "created_at": d.created_at.isoformat() if d.created_at else None,

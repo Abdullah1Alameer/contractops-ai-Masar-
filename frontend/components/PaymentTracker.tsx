@@ -22,10 +22,11 @@ function statusKey(st: string): TKey {
 }
 
 function statusTone(st: string): "info" | "success" | "danger" | "warning" | "neutral" {
-  if (st === "claimable") return "info";
+  if (st === "claimable" || st === "due") return "info";
+  if (st === "scheduled") return "neutral";
   if (st === "paid") return "success";
   if (st === "overdue") return "danger";
-  if (st === "needs_review") return "warning";
+  if (st === "needs_review" || st === "inactive") return "warning";
   return "neutral";
 }
 
@@ -153,7 +154,11 @@ export default function PaymentTracker({
       )}
       {rows.length === 0 && <EmptyState title={t("empty.milestones")} description={t("payment.empty")} />}
       <ul className="space-y-4">
-        {rows.map((m) => (
+        {rows
+          .filter((m) => m.role !== "component")
+          .map((m) => {
+          const breakdown = rows.filter((c) => c.role === "component" && c.parent_seq === m.sequence);
+          return (
           <li key={m.id}>
             <Card className="p-5">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -178,8 +183,24 @@ export default function PaymentTracker({
             </div>
 
             <p className="mt-1 text-sm">
-              {m.due_date ? <DualDate date={m.due_date} /> : <span className="text-gray-400">{t("payment.noDueDate")}</span>}
+              {m.next_due_date || m.due_date ? (
+                <DualDate date={(m.next_due_date || m.due_date)!} />
+              ) : (
+                <span className="text-gray-400">{t("payment.noDueDate")}</span>
+              )}
             </p>
+            {m.frequency && (
+              <p className="text-xs text-gray-500">
+                {m.frequency}
+                {m.due_rule?.day != null ? ` · ${t("payment.dueDay" as TKey)} ${m.due_rule.day}` : ""}
+              </p>
+            )}
+            {m.calculation_explanation && (
+              <p className="mt-1 text-xs text-gray-600">{m.calculation_explanation}</p>
+            )}
+            {!m.claimable && m.status === "scheduled" && (
+              <p className="mt-1 text-xs text-gray-500">{t("payment.status.scheduled")}</p>
+            )}
 
             <div className="mt-3">
               <div className="mb-1 flex justify-between text-xs text-gray-600">
@@ -231,7 +252,7 @@ export default function PaymentTracker({
                 </button>
               ) : null}
               {!m.paid ? (
-                <Button variant="primary" size="sm" disabled={busyId === m.id} loading={busyId === m.id} onClick={() => togglePaid(m, true)}>
+                <Button variant="primary" size="sm" disabled={busyId === m.id || !m.claimable} loading={busyId === m.id} onClick={() => togglePaid(m, true)}>
                   {t("payment.markPaid")}
                 </Button>
               ) : (
@@ -240,9 +261,20 @@ export default function PaymentTracker({
                 </Button>
               )}
             </div>
+            {breakdown.length > 0 && (
+              <ul className="mt-3 space-y-1 border-t pt-3 text-xs text-gray-600">
+                {breakdown.map((c) => (
+                  <li key={c.id} className="flex justify-between gap-2">
+                    <span>{c.label}</span>
+                    <span>{c.amount_sar != null ? formatSAR(c.amount_sar, lang) : "—"}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
             </Card>
           </li>
-        ))}
+        );
+        })}
       </ul>
     </div>
   );

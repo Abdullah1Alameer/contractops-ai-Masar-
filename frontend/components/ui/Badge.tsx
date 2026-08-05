@@ -9,6 +9,7 @@ const toneClasses = {
   neutral: "bg-gray-100 text-gray-700 ring-gray-500/10",
   purple: "bg-purple-100 text-purple-800 ring-purple-600/20",
   orange: "bg-orange-100 text-orange-800 ring-orange-600/20",
+  subtle: "bg-brand-50 text-brand-800 ring-brand-600/15",
 };
 
 export default function Badge({

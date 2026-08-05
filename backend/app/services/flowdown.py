@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..ai.client import AIError, complete_json
-from ..ai.classifier import FLOWDOWN_ELIGIBLE
+from ..ai.classifier import is_comparison_eligible
 from ..ai.flowdown_prompt import (
     FLOWDOWN_CATEGORIES,
     FLOWDOWN_RISKS,
@@ -52,6 +52,15 @@ _CATEGORY_PATTERNS: dict[str, list[re.Pattern]] = {
     "dispute_resolution": [re.compile(r"dispute|arbitration|تحكيم|نزاع", re.I)],
     "governing_law": [re.compile(r"governing law|قانون|jurisdiction", re.I)],
     "force_majeure": [re.compile(r"force majeure|قوه قاهرة|fortuitous", re.I)],
+    "confidentiality": [re.compile(r"confidential|سرية|non-disclosure|nda", re.I)],
+    "liability": [re.compile(r"liability|مسؤولية|limitation of liability", re.I)],
+    "indemnity": [re.compile(r"indemn|تعويض|hold harmless", re.I)],
+    "intellectual_property": [re.compile(r"intellectual property|ip |trademark|patent|ملكية فكرية", re.I)],
+    "data_protection": [re.compile(r"data protection|privacy|gdpr|personal data|حماية البيانات", re.I)],
+    "sla": [re.compile(r"sla|service level|uptime|availability", re.I)],
+    "renewal": [re.compile(r"renewal|تجديد", re.I)],
+    "auto_renewal": [re.compile(r"auto.?renew|automatic renew", re.I)],
+    "compliance": [re.compile(r"compliance|regulatory|امتثال", re.I)],
 }
 
 
@@ -421,16 +430,14 @@ def sort_findings(items: list[dict]) -> list[dict]:
 def check_eligibility(main: Contract | None, sub: Contract | None):
     if main is None or sub is None:
         raise ValueError("not_found")
+    if main.id == sub.id:
+        raise ValueError("flowdown_wrong_pair")
     if main.status not in _READY or sub.status not in _READY:
         raise ValueError("extraction_not_complete")
-    if main.contract_category not in FLOWDOWN_ELIGIBLE:
+    if not is_comparison_eligible(main):
         raise ValueError("flowdown_ineligible_main")
-    if sub.contract_category not in FLOWDOWN_ELIGIBLE:
+    if not is_comparison_eligible(sub):
         raise ValueError("flowdown_ineligible_sub")
-    if main.contract_category != MAIN_CATEGORY:
-        raise ValueError("flowdown_wrong_pair")
-    if sub.contract_category != SUB_CATEGORY:
-        raise ValueError("flowdown_wrong_pair")
 
 
 def run_flowdown(main_id, sub_id, db: Session) -> dict:
@@ -507,16 +514,11 @@ def list_flowdown_for_pair(main_id, sub_id, db: Session) -> dict | None:
 
 
 def list_flowdown_contracts(db: Session) -> dict:
-    q = db.query(Contract).filter(
-        Contract.status.in_(_READY),
-        Contract.contract_category.in_(FLOWDOWN_ELIGIBLE),
-    )
-    main_list = []
-    sub_list = []
-    for c in q.order_by(Contract.title.asc()).all():
-        item = {"id": str(c.id), "title": c.title or str(c.id), "contract_category": c.contract_category}
-        if c.contract_category == MAIN_CATEGORY:
-            main_list.append(item)
-        elif c.contract_category == SUB_CATEGORY:
-            sub_list.append(item)
-    return {"main": main_list, "sub": sub_list}
+    items = []
+    for c in db.query(Contract).filter(Contract.status.in_(_READY)).order_by(Contract.title.asc()).all():
+        if not is_comparison_eligible(c):
+            continue
+        items.append(
+            {"id": str(c.id), "title": c.title or str(c.id), "contract_category": c.contract_category}
+        )
+    return {"main": items, "sub": items}

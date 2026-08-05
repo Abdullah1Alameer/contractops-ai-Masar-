@@ -1,28 +1,21 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
-import KPI from "@/components/ui/KPI";
-import { SkeletonCard, SkeletonKPI } from "@/components/ui/Skeleton";
+import { ReviewStatusBadge } from "@/components/SendForReviewDialog";
 import Button from "@/components/ui/Button";
-import {
-  api,
-  fetchDeadlines,
-  fetchMilestones,
-  getFlowdown,
-  listFlowdownContracts,
-} from "@/lib/api";
+import Stat from "@/components/ui/Stat";
+import Timeline from "@/components/ui/Timeline";
+import SectionHeader from "@/components/ui/SectionHeader";
+import RefreshingDot from "@/components/ui/RefreshingDot";
+import { SkeletonCard, SkeletonKPI } from "@/components/ui/Skeleton";
+import { api } from "@/lib/api";
+import { mapActivityEvents } from "@/lib/activity";
+import { useCachedFetch } from "@/lib/cache";
 import { useI18n } from "@/lib/i18n";
-import type { ContractListItem, DeadlineRow, MilestonesResponse } from "@/lib/types";
-import { formatCompactSAR } from "@/lib/utils";
-
-type ContractBundle = {
-  contract: ContractListItem;
-  deadlines: DeadlineRow[];
-  milestones: MilestonesResponse | null;
-};
+import type { ContractListItem, DeadlineRow, ReviewRequestRow } from "@/lib/types";
 
 type DashboardAggregate = {
   total: number;
@@ -38,145 +31,78 @@ type DashboardAggregate = {
   riskContracts: { id: string; title: string; score: number }[];
 };
 
-async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  let i = 0;
-  async function worker() {
-    while (i < items.length) {
-      const idx = i++;
-      out[idx] = await fn(items[idx]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return out;
-}
+type DashboardSummaryResponse = {
+  kpis: Record<string, number>;
+  recent_contracts: ContractListItem[];
+  recent_activity: import("@/lib/types").ActivityEventRow[];
+  reviews_summary: { items: ReviewRequestRow[] };
+  approvals_summary: import("@/lib/types").ApprovalSummaryKpis;
+  signature_summary: import("@/lib/types").SignatureSummaryKpis;
+  aggregate: {
+    total: number;
+    active: number;
+    upcoming7: number;
+    overdue: number;
+    claimable_sar: number;
+    high_risk_count: number;
+    overdue_list: { contract_id: string; contract_title: string; row: DeadlineRow }[];
+    upcoming_list: { contract_id: string; contract_title: string; row: DeadlineRow }[];
+    risk_contracts: { id: string; title: string; score: number }[];
+  };
+};
 
-function isReady(c: ContractListItem) {
-  return c.status === "ready" || c.status === "needs_review";
-}
-
-function deadlineOverdue(d: DeadlineRow) {
-  if (d.status === "missed" || d.status === "time_barred") return true;
-  if (d.days_remaining != null && d.days_remaining < 0) return true;
-  return false;
-}
-
-function riskScore(deadlines: DeadlineRow[]): number {
-  let s = 0;
-  for (const d of deadlines) {
-    if (deadlineOverdue(d)) s += 10;
-    else if (d.severity === "critical" && d.days_remaining != null && d.days_remaining <= 30) s += 8;
-    else if (d.severity === "critical") s += 5;
-    if (d.needs_review) s += 3;
-  }
-  return s;
-}
-
-function buildAggregate(bundles: ContractBundle[], total: number): DashboardAggregate {
-  let active = 0;
-  let upcoming7 = 0;
-  let overdue = 0;
-  let claimableSar = 0;
-  let highRiskCount = 0;
-  const overdueList: DashboardAggregate["overdueList"] = [];
-  const upcomingList: DashboardAggregate["upcomingList"] = [];
-  const riskContracts: DashboardAggregate["riskContracts"] = [];
-
-  for (const b of bundles) {
-    active++;
-    const rs = riskScore(b.deadlines);
-    if (rs >= 8) highRiskCount++;
-    riskContracts.push({ id: b.contract.id, title: b.contract.title, score: rs });
-
-    for (const d of b.deadlines) {
-      if (deadlineOverdue(d)) {
-        overdue++;
-        overdueList.push({ contractTitle: b.contract.title, contractId: b.contract.id, row: d });
-      } else if (d.days_remaining != null && d.days_remaining >= 0 && d.days_remaining <= 7) {
-        upcoming7++;
-        upcomingList.push({ contractTitle: b.contract.title, contractId: b.contract.id, row: d });
-      }
-    }
-
-    if (b.milestones?.summary) {
-      claimableSar += b.milestones.summary.claimable_sar ?? 0;
-    }
-  }
-
-  overdueList.sort((a, b) => (a.row.days_remaining ?? -999) - (b.row.days_remaining ?? -999));
-  upcomingList.sort((a, b) => (a.row.days_remaining ?? 999) - (b.row.days_remaining ?? 999));
-  riskContracts.sort((a, b) => b.score - a.score);
-
+function mapSummaryToAgg(raw: DashboardSummaryResponse) {
+  const a = raw.aggregate;
   return {
-    total,
-    active,
-    upcoming7,
-    overdue,
-    claimableSar,
-    highRiskCount,
-    coveragePct: null,
-    missingCritical: null,
-    overdueList,
-    upcomingList,
-    riskContracts,
+    agg: {
+      total: a.total,
+      active: a.active,
+      upcoming7: a.upcoming7,
+      overdue: a.overdue,
+      claimableSar: a.claimable_sar,
+      highRiskCount: a.high_risk_count,
+      coveragePct: null as number | null,
+      missingCritical: null as number | null,
+      overdueList: a.overdue_list.map((x) => ({
+        contractId: x.contract_id,
+        contractTitle: x.contract_title,
+        row: x.row,
+      })),
+      upcomingList: a.upcoming_list.map((x) => ({
+        contractId: x.contract_id,
+        contractTitle: x.contract_title,
+        row: x.row,
+      })),
+      riskContracts: a.risk_contracts,
+    } satisfies DashboardAggregate,
+    reviewItems: raw.reviews_summary?.items ?? [],
+    approvalKpis: raw.approvals_summary,
+    sigKpis: raw.signature_summary,
+    negotiationCount: raw.kpis?.negotiations ?? 0,
+    recentContracts: raw.recent_contracts ?? [],
   };
 }
 
 export default function DashboardPage() {
-  const { t, lang } = useI18n();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [agg, setAgg] = useState<DashboardAggregate | null>(null);
+  const { t } = useI18n();
+  const { data: summary, isLoading, isValidating, error, refresh } = useCachedFetch(
+    "dashboard:summary",
+    () => api<DashboardSummaryResponse>("/api/dashboard/summary")
+  );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(false);
-    try {
-      const contracts = await api<ContractListItem[]>("/api/contracts");
-      const ready = contracts.filter(isReady);
-      const bundles = await mapPool(ready, 4, async (c) => {
-        const [deadlinesRes, milestonesRes] = await Promise.all([
-          fetchDeadlines(c.id).catch(() => ({ deadlines: [], summary: {} as any })),
-          fetchMilestones(c.id).catch(() => null),
-        ]);
-        return {
-          contract: c,
-          deadlines: deadlinesRes.deadlines ?? [],
-          milestones: milestonesRes,
-        };
-      });
+  const mapped = useMemo(() => (summary ? mapSummaryToAgg(summary) : null), [summary]);
 
-      let data = buildAggregate(bundles, contracts.length);
+  const activityItems = useMemo(() => {
+    if (!summary?.recent_activity) return [];
+    return mapActivityEvents(summary.recent_activity, t);
+  }, [summary?.recent_activity, t]);
 
-      try {
-        const pairs = await listFlowdownContracts();
-        const main = pairs.main[0];
-        const sub = pairs.sub[0];
-        if (main && sub) {
-          const fd = await getFlowdown(main.id, sub.id);
-          if (fd.findings?.length) {
-            data = {
-              ...data,
-              coveragePct: fd.summary.coverage_pct,
-              missingCritical: fd.summary.missing_count + fd.summary.critical_count,
-            };
-          }
-        }
-      } catch {
-        /* no cached flowdown */
-      }
-
-      setAgg(data);
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const agg = mapped?.agg ?? null;
+  const reviewItems = mapped?.reviewItems ?? [];
+  const approvalKpis = mapped?.approvalKpis ?? null;
+  const sigKpis = mapped?.sigKpis ?? null;
+  const negotiationCount = mapped?.negotiationCount ?? 0;
+  const recentContracts = mapped?.recentContracts ?? [];
 
   const coverageTone = useMemo(() => {
     if (agg?.coveragePct == null) return "default" as const;
@@ -192,7 +118,7 @@ export default function DashboardPage() {
         <Card>
           <CardBody className="text-center">
             <p className="text-danger-600">{t("common.error")}</p>
-            <Button variant="secondary" className="mt-4" onClick={load}>
+            <Button variant="secondary" className="mt-4" onClick={() => refresh()}>
               {t("common.retry")}
             </Button>
           </CardBody>
@@ -203,9 +129,12 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 motion-safe:animate-fadeIn">
-      <h1 className="text-2xl font-bold text-gray-900 md:text-3xl">{t("dashboard.title")}</h1>
+      <h1 className="text-title flex items-center gap-2">
+        {t("dashboard.title")}
+        {isValidating && <RefreshingDot />}
+      </h1>
 
-      {loading ? (
+      {isLoading && !agg ? (
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -220,44 +149,132 @@ export default function DashboardPage() {
         </>
       ) : agg ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <KPI label={t("dashboard.kpi.totalContracts")} value={agg.total} />
-            <KPI label={t("dashboard.kpi.active")} value={agg.active} tone="info" />
-            <KPI label={t("dashboard.kpi.upcoming")} value={agg.upcoming7} tone="warning" />
-            <KPI label={t("dashboard.kpi.overdue")} value={agg.overdue} tone="danger" />
-            <KPI label={t("dashboard.kpi.claimable")} value={formatCompactSAR(agg.claimableSar, lang)} tone="success" />
-            <KPI label={t("dashboard.kpi.highRisk")} value={agg.highRiskCount} tone={agg.highRiskCount > 0 ? "danger" : "default"} />
-            <KPI
-              label={t("dashboard.kpi.coverage")}
-              value={agg.coveragePct != null ? `${Math.round(agg.coveragePct)}%` : "—"}
-              tone={coverageTone}
-              hint={
-                agg.coveragePct == null ? (
-                  <span>
-                    {t("dashboard.empty.noFlowdown")}{" "}
-                    <Link href="/flowdown" className="font-semibold text-brand-700 underline">
-                      {t("nav.flowdown")}
-                    </Link>
-                  </span>
-                ) : undefined
-              }
-            />
-            <KPI
-              label={t("dashboard.kpi.missingCritical")}
-              value={agg.missingCritical ?? "—"}
-              tone={agg.missingCritical != null && agg.missingCritical > 0 ? "warning" : "default"}
-            />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Link href="/contracts"><Stat label={t("dashboard.kpi.activeContracts")} value={agg.active} tone="brand" /></Link>
+            <Link href="/reviews"><Stat label={t("dashboard.kpi.pendingReviews")} value={reviewItems.filter((r) => r.status === "sent" || r.status === "opened").length} tone="info" /></Link>
+            <Link href="/contracts?stage=negotiation"><Stat label={t("dashboard.kpi.negotiationsOpen")} value={negotiationCount} /></Link>
+            <Link href="/contracts?stage=internal_review&role=legal"><Stat label={t("dashboard.kpi.awaitingLegal")} value={approvalKpis?.pending_legal ?? 0} tone="warning" /></Link>
+            <Link href="/contracts?stage=internal_review&role=finance"><Stat label={t("dashboard.kpi.awaitingFinance")} value={approvalKpis?.pending_finance ?? 0} tone="warning" /></Link>
+            <Link href="/contracts?stage=internal_review&role=executive"><Stat label={t("dashboard.kpi.awaitingExecutive")} value={approvalKpis?.pending_executive ?? 0} tone="warning" /></Link>
+            <Link href="/contracts?stage=awaiting_signature"><Stat label={t("dashboard.kpi.readyToSign")} value={sigKpis?.awaiting_signature ?? 0} tone="success" /></Link>
+            <Link href="/contracts?stage=active"><Stat label={t("dashboard.kpi.completed")} value={sigKpis?.completed_signatures ?? 0} tone="success" /></Link>
+            <Stat label={t("dashboard.kpi.rejected")} value={sigKpis?.declined_requests ?? 0} tone="danger" />
           </div>
 
           {agg.active === 0 && agg.total === 0 ? (
             <EmptyState title={t("dashboard.empty.noData")} actionLabel={t("nav.upload")} onAction={() => (window.location.href = "/upload")} />
           ) : (
-            <div className="grid gap-6 lg:grid-cols-3">
-              <Panel title={t("dashboard.panel.recentAlerts")} empty={t("empty.deadlines")} rows={agg.overdueList.slice(0, 8)} t={t} />
-              <Panel title={t("dashboard.panel.upcoming7")} empty={t("empty.deadlines")} rows={agg.upcomingList.slice(0, 8)} t={t} />
-              <RiskPanel title={t("dashboard.panel.highestRisk")} contracts={agg.riskContracts.slice(0, 5)} empty={t("dashboard.empty.noData")} t={t} />
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="space-y-6">
+                <Card className="surface-panel border-0 shadow-none">
+                  <CardHeader>
+                    <SectionHeader title={t("dashboard.section.recentActivity")} />
+                  </CardHeader>
+                  <CardBody>
+                    {activityItems.length === 0 ? (
+                      <EmptyState title={t("common.empty")} />
+                    ) : (
+                      <Timeline items={activityItems} />
+                    )}
+                  </CardBody>
+                </Card>
+                <Card className="surface-panel border-0 shadow-none">
+                  <CardHeader>
+                    <SectionHeader title={t("dashboard.section.aiInsights")} />
+                  </CardHeader>
+                  <CardBody>
+                    <ul className="space-y-2">
+                      {agg.riskContracts.filter((c) => c.score > 0).slice(0, 5).map((c) => (
+                        <li key={c.id}>
+                          <Link href={`/contracts/${c.id}`} className="link-strong">
+                            {c.title}
+                          </Link>
+                          <span className="ms-2 text-xs font-bold text-danger-600">{c.score}</span>
+                        </li>
+                      ))}
+                      {agg.riskContracts.every((c) => c.score === 0) && <p className="text-hint">{t("common.empty")}</p>}
+                    </ul>
+                  </CardBody>
+                </Card>
+                {sigKpis && (
+                  <Card>
+                    <CardHeader>
+                      <h2 className="font-bold">{t("dashboard.section.signatureProgress")}</h2>
+                    </CardHeader>
+                    <CardBody className="grid gap-2 sm:grid-cols-2">
+                      <Link href="/contracts?stage=awaiting_signature" className="text-sm font-semibold text-brand-700">
+                        {t("dashboard.kpi.sigAwaiting")}: {sigKpis.awaiting_signature}
+                      </Link>
+                      <Link href="/contracts?stage=partially_signed" className="text-sm font-semibold text-brand-700">
+                        {t("dashboard.kpi.sigPartial")}: {sigKpis.partially_signed}
+                      </Link>
+                    </CardBody>
+                  </Card>
+                )}
+              </div>
+              <div className="space-y-6">
+                <Card className="surface-panel border-0 shadow-none">
+                  <CardHeader>
+                    <SectionHeader title={t("dashboard.section.recentUpdates")} />
+                  </CardHeader>
+                  <CardBody className="divide-y divide-neutral-100 p-0">
+                    {recentContracts.map((c) => (
+                      <Link key={c.id} href={`/contracts/${c.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-neutral-50">
+                        <span className="font-medium text-neutral-900">{c.title}</span>
+                        <span className="text-xs text-neutral-500">{c.created_at?.slice(0, 10) ?? "—"}</span>
+                      </Link>
+                    ))}
+                  </CardBody>
+                </Card>
+                <Panel title={t("dashboard.section.upcoming")} empty={t("empty.deadlines")} rows={agg.upcomingList.slice(0, 8)} t={t} />
+                <RiskPanel title={t("dashboard.section.highRisk")} contracts={agg.riskContracts.slice(0, 5)} empty={t("dashboard.empty.noData")} t={t} />
+                {approvalKpis && (
+                  <Card>
+                    <CardHeader>
+                      <h2 className="font-bold">{t("dashboard.section.approvalProgress")}</h2>
+                    </CardHeader>
+                    <CardBody className="space-y-2 text-sm">
+                      <Link href="/contracts?stage=internal_review&role=legal" className="block text-brand-700">
+                        {t("dashboard.kpi.pendingLegalApproval")}: {approvalKpis.pending_legal}
+                      </Link>
+                      <Link href="/contracts?stage=approved" className="block text-brand-700">
+                        {t("dashboard.kpi.awaitingSignature")}: {approvalKpis.approved_awaiting_signature}
+                      </Link>
+                    </CardBody>
+                  </Card>
+                )}
+              </div>
             </div>
           )}
+
+          <Card>
+            <CardHeader>
+              <Link href="/reviews" className="font-bold text-gray-900 hover:text-brand-700">
+                {t("review.dashboard.title")}
+              </Link>
+            </CardHeader>
+            <CardBody className="pt-0">
+              {reviewItems.length === 0 ? (
+                <p className="py-6 text-center text-sm text-gray-500">{t("review.dashboard.empty")}</p>
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {reviewItems.slice(0, 12).map((r) => (
+                    <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                      <div>
+                        <Link href={`/contracts/${r.contract_id}`} className="text-sm font-semibold text-brand-700 hover:underline">
+                          {r.contract_title ?? r.contract_id}
+                        </Link>
+                        <p className="text-xs text-gray-500">
+                          {t("review.dashboard.recipient")}: {r.recipient_name} · {r.created_at?.slice(0, 10)}
+                        </p>
+                      </div>
+                      <ReviewStatusBadge status={r.status} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardBody>
+          </Card>
         </>
       ) : null}
     </div>

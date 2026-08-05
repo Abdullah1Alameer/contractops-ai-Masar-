@@ -1,0 +1,31 @@
+{
+  "threads": [
+    {
+      "external_thread_id": "sim-thread-msa-alfalak-001",
+      "subject": "Re: Master Service Agreement — Al-Falak Ltd",
+      "messages": [
+        {
+          "external_message_id": "sim-msg-msa-revision-v2",
+          "external_thread_id": "sim-thread-msa-alfalak-001",
+          "sender_name": "Sarah Al-Mutairi",
+          "sender_email": "legal@alfalak.example",
+          "recipients": ["legal@yourcompany.example"],
+          "cc": [],
+          "subject": "Re: Master Service Agreement — Al-Falak Ltd",
+          "body_text": "Dear Legal Team,\n\nWe have revised clauses 8, 12, and 19. Payment terms are now 90 days net. Liability is uncapped. Governing law is England and Wales.\n\nWe can proceed if these changes are accepted.\n\nRegards,\nSarah",
+          "received_at": "2026-08-01T10:30:00+00:00",
+          "reply_reference": null,
+          "attachments": [
+            {
+              "external_id": "att-msa-v2",
+              "filename": "MSA_AlFalak_Revised_v2.txt",
+              "mime_type": "text/plain",
+              "size_bytes": 1200,
+              "inline_text": "MASTER SERVICE AGREEMENT (REVISED)\n\nParties: Your Company / Al-Falak Ltd\n\n8. Payment Terms: Client shall pay all invoices within ninety (90) days of receipt.\n\n12. Limitation of Liability: Provider's liability shall be unlimited for all claims.\n\n19. Governing Law: This Agreement is governed by the laws of England and Wales.\n"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

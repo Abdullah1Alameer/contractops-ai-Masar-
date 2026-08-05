@@ -17,9 +17,10 @@ from sqlalchemy.orm import Session
 from ..models import Clause, Contract, Extraction, Obligation
 from ..services.dates import parse_date_raw
 from ..services.storage import storage
-from ..services.textextract import build_raw_text, extract_pages
-from .classifier import SUPPORTED_CATEGORIES, category_to_type, classify_contract
+from ..services.textextract import build_raw_text, extract_pages, extract_pages_geometry, layout_from_geometry
+from .classifier import SUPPORTED_CATEGORIES, category_to_type, classify_contract, relationship_type_for_category
 from .client import complete_json
+from .consent_schema import CONSENT_EXTRACTION_SCHEMA, CONSENT_SYSTEM, is_consent_category
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .schemas import EXTRACTION_SCHEMA
 from .verify import normalize, page_for_offset, validate_quote
@@ -35,6 +36,8 @@ _SCALAR_CONF_KEYS = {"value_sar": "value_sar", "governing_law": "governing_law",
 _DATE_FIELDS = {
     "start_date": "start_date_raw",
     "end_date": "end_date_raw",
+    "execution_date": "execution_date_raw",
+    "commencement_date": "commencement_date_raw",
     "bond_expiry": "bond_expiry_raw",
     "warranty_end": "warranty_end_raw",
 }
@@ -47,9 +50,11 @@ def run_extraction(contract_id, db: Session) -> dict:
 
     # ---- Stage 1: text ----
     data = storage.get(contract.file_url)
-    pages = extract_pages(data, contract.file_url)
+    geo = extract_pages_geometry(data, contract.file_url)
+    pages = [{"page": p["page"], "text": p.get("text") or ""} for p in geo]
     raw_text, page_starts = build_raw_text(pages)
     contract.raw_text = raw_text
+    contract.page_layout = layout_from_geometry(geo)
     norm_text = normalize(raw_text)
 
     # ---- Stage 0: classification (must run before extraction) ----
@@ -59,24 +64,28 @@ def run_extraction(contract_id, db: Session) -> dict:
     contract.classification_confidence = classification["confidence"]
     contract.classification_message = classification.get("message")
     contract.type = category_to_type(classification["contract_category"])
+    contract.relationship_type = relationship_type_for_category(classification["contract_category"])
 
     if not classification["supported"]:
-        # Do not persist unsupported uploads — remove file + row entirely.
-        file_key = contract.file_url
         category = classification["contract_category"]
         confidence = classification["confidence"]
         message = classification.get("message", "This contract type is currently not supported.")
-        db.delete(contract)
+        contract.status = "unsupported"
+        contract.supported = False
         db.commit()
-        storage.delete(file_key)
         return {
             "supported": False,
-            "deleted": True,
+            "deleted": False,
+            "contract_id": str(contract.id),
             "contract_category": category,
             "confidence": confidence,
             "message": message,
+            "needs_review": classification.get("needs_review", False),
             "supported_categories": SUPPORTED_CATEGORIES,
         }
+
+    if is_consent_category(classification["contract_category"]):
+        return _run_consent_extraction(contract, norm_text, raw_text, classification, db)
 
     # ---- Stage 2: model ----
     result, n_chunks = _run_model(norm_text, pages)
@@ -200,8 +209,16 @@ def run_extraction(contract_id, db: Session) -> dict:
         db.add(Obligation(
             id=_uuid.uuid4(),
             contract_id=contract.id,
+            title=item.get("title"),
             description=item.get("description"),
             responsible_party=item.get("responsible_party"),
+            beneficiary=item.get("beneficiary"),
+            trigger_type=item.get("trigger_type"),
+            trigger_event=item.get("trigger_event"),
+            temporal_rule=item.get("temporal_rule"),
+            contract_required_evidence=item.get("contract_required_evidence") or [],
+            suggested_evidence=item.get("suggested_evidence") or [],
+            completion_criteria=item.get("completion_criteria"),
             due_date=due,
             penalty_text=item.get("penalty_text"),
             status="pending",
@@ -215,6 +232,23 @@ def run_extraction(contract_id, db: Session) -> dict:
     contract.status = "needs_review" if fail_ratio > FAIL_RATIO_REVIEW else "ready"
 
     db.commit()
+
+    try:
+        from ..services.versions import current_version, sync_version_snapshot
+
+        sync_version_snapshot(contract.id, db)
+        cur = current_version(contract.id, db)
+        if cur:
+            from ..services.approvals import log_activity
+
+            log_activity(
+                db,
+                contract.id,
+                "extraction_completed",
+                metadata={"version_number": cur.version_number},
+            )
+    except Exception:
+        pass
 
     try:
         from ..services.deadlines import build_deadlines_for_contract
@@ -232,8 +266,21 @@ def run_extraction(contract_id, db: Session) -> dict:
     except Exception:
         db.rollback()
 
-    return {
+    try:
+        from ..services.intelligence import rebuild_intelligence
+
+        rebuild_intelligence(
+            contract.id,
+            db,
+            ["obligations", "risk", "negotiation"],
+        )
+    except Exception:
+        db.rollback()
+
+    out = {
         "status": contract.status,
+        "supported": True,
+        "contract_id": str(contract.id),
         "counts": {
             "clauses": db.query(Clause).filter(Clause.contract_id == contract.id).count(),
             "obligations": len(verified_lists["obligations"]),
@@ -242,6 +289,93 @@ def run_extraction(contract_id, db: Session) -> dict:
         },
         "needs_review": needs_review,
         "pipeline_report": report,
+    }
+    if classification.get("needs_review"):
+        contract.status = "needs_review"
+        contract.classification_message = classification.get("message")
+        db.commit()
+        out["status"] = contract.status
+        out["classification_needs_review"] = True
+    return out
+
+
+def _run_consent_extraction(
+    contract: Contract,
+    norm_text: str,
+    raw_text: str,
+    classification: dict,
+    db: Session,
+) -> dict:
+    """Consent documents: structured consent_terms only — no obligations or flowdown."""
+    contract.type = None
+    contract.relationship_type = "standalone"
+
+    db.query(Obligation).filter(Obligation.contract_id == contract.id).delete()
+    db.query(Extraction).filter(Extraction.contract_id == contract.id).delete()
+    db.query(Clause).filter(Clause.contract_id == contract.id).delete()
+    db.flush()
+
+    user = (
+        "Extract consent terms from this document excerpt.\n\n"
+        f"----- DOCUMENT START -----\n{norm_text[:12000]}\n----- DOCUMENT END -----"
+    )
+    result = complete_json(CONSENT_SYSTEM, user, CONSENT_EXTRACTION_SCHEMA)
+    conf = float(result.get("confidence") or 0.7)
+
+    consenting = result.get("consenting_party")
+    if consenting:
+        contract.party_a = consenting
+    receivers = result.get("receiving_organizations") or []
+    if receivers:
+        contract.party_b = receivers[0] if len(receivers) == 1 else ", ".join(receivers[:3])
+
+    title = result.get("document_title")
+    if title:
+        contract.title = title
+
+    db.add(
+        Extraction(
+            id=_uuid.uuid4(),
+            contract_id=contract.id,
+            field_name="consent_terms",
+            value_json=result,
+            confidence=round(conf, 2),
+            status="auto",
+        )
+    )
+
+    contract.status = "needs_review" if classification.get("needs_review") else "ready"
+    if classification.get("message"):
+        contract.classification_message = classification.get("message")
+    db.commit()
+
+    try:
+        from ..services.versions import current_version, sync_version_snapshot
+
+        sync_version_snapshot(contract.id, db)
+        cur = current_version(contract.id, db)
+        if cur:
+            from ..services.approvals import log_activity
+
+            log_activity(
+                db,
+                contract.id,
+                "extraction_completed",
+                metadata={"version_number": cur.version_number, "consent": True},
+            )
+            db.commit()
+    except Exception:
+        db.rollback()
+
+    return {
+        "status": contract.status,
+        "supported": True,
+        "contract_id": str(contract.id),
+        "contract_category": classification["contract_category"],
+        "counts": {"clauses": 0, "obligations": 0, "notice_periods": 0, "milestones": 0},
+        "needs_review": [] if contract.status == "ready" else [{"field": "classification", "reason": "needs_classification_review"}],
+        "pipeline_report": {"total_items": 0, "verified_items": 0, "failed_quotes": [], "chunks": 1, "consent": True},
+        "classification_needs_review": bool(classification.get("needs_review")),
     }
 
 

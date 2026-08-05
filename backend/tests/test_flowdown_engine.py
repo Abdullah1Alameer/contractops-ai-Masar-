@@ -100,13 +100,53 @@ def test_sort_critical_before_informational():
     assert sorted_items[0]["risk_level"] == "critical"
 
 
-def test_eligibility_wrong_pair():
+def test_eligibility_same_contract_rejected():
     main = SimpleNamespace(
+        id="same-uuid",
         status="ready",
-        contract_category="Subcontract Agreement",
+        contract_category="NDA",
+        supported=True,
     )
-    sub = SimpleNamespace(status="ready", contract_category="Subcontract Agreement")
+    sub = SimpleNamespace(
+        id="same-uuid",
+        status="ready",
+        contract_category="Service Agreement",
+        supported=True,
+    )
     with pytest.raises(ValueError, match="flowdown_wrong_pair"):
+        check_eligibility(main, sub)
+
+
+def test_eligibility_two_commercial_ok():
+    main = SimpleNamespace(
+        id="main-id",
+        status="ready",
+        contract_category="Main Construction Contract",
+        supported=True,
+    )
+    sub = SimpleNamespace(
+        id="sub-id",
+        status="ready",
+        contract_category="NDA",
+        supported=True,
+    )
+    check_eligibility(main, sub)
+
+
+def test_eligibility_personal_ineligible():
+    main = SimpleNamespace(
+        id="a",
+        status="ready",
+        contract_category="NDA",
+        supported=True,
+    )
+    sub = SimpleNamespace(
+        id="b",
+        status="ready",
+        contract_category="Marriage Contract",
+        supported=False,
+    )
+    with pytest.raises(ValueError, match="flowdown_ineligible_sub"):
         check_eligibility(main, sub)
 
 

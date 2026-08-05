@@ -71,6 +71,7 @@
     "detail.viewer.page",
     "detail.viewer.prev",
     "detail.viewer.next",
+    "detail.viewer.pdfFallback",
     "detail.clause",
     "obligation.desc",
     "obligation.party",

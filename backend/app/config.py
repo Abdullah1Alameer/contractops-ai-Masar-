@@ -15,3 +15,6 @@ STORAGE_DIR = os.getenv("STORAGE_DIR", str(ROOT / "storage"))
 MAX_UPLOAD_MB = 20
 DEMO_CONTRACTS_DIR = ROOT / "database" / "demo_contracts"
 GROUND_TRUTH_PATH = ROOT / "database" / "seed" / "ground_truth.json"
+REVIEW_BASE_URL = os.getenv("REVIEW_BASE_URL", "http://localhost:3000")
+ESIGN_PROVIDER = os.getenv("ESIGN_PROVIDER", "simulated").strip().lower()
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "simulated").strip().lower()

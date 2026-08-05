@@ -1,4 +1,4 @@
-"""Prompt B — Flow-Down X-Ray comparison (strict json_schema)."""
+"""Prompt B — Contract Comparison & Compliance (strict json_schema)."""
 from __future__ import annotations
 
 import json
@@ -16,18 +16,26 @@ FLOWDOWN_CATEGORIES: list[str] = [
     "advance_payment",
     "insurance",
     "quality_requirements",
-    "inspection_requirements",
-    "hse_requirements",
+    "confidentiality",
+    "liability",
+    "indemnity",
+    "intellectual_property",
+    "data_protection",
+    "sla",
+    "renewal",
+    "auto_renewal",
+    "termination",
+    "notice_requirements",
+    "dispute_resolution",
+    "governing_law",
+    "jurisdiction",
+    "compliance",
     "liquidated_damages",
     "delay_clauses",
     "extension_of_time",
     "warranty",
     "defects_liability_period",
-    "termination",
     "variation_orders",
-    "notice_requirements",
-    "dispute_resolution",
-    "governing_law",
     "force_majeure",
 ]
 
@@ -42,41 +50,38 @@ FLOWDOWN_STATUSES = [
 
 FLOWDOWN_RISKS = ["critical", "high", "medium", "low", "informational"]
 
-FLOWDOWN_SYSTEM = """You are a senior Saudi construction contracts lawyer performing back-to-back flow-down analysis between a Main Construction Contract and a Subcontract Agreement.
+FLOWDOWN_SYSTEM = """You are a senior commercial contracts lawyer performing Contract Comparison & Compliance analysis between a Primary contract and a Related contract (MSA vs SOW, template vs draft, parent vs subcontract, or any valid pair).
 
 This is LEGAL SEMANTIC comparison — NOT a text diff. Compare obligations, thresholds, dates, and risk allocation category by category.
 
 STRICT RULES:
-1. You MUST produce exactly one finding per category in the provided categories list (same order not required).
+1. You MUST produce exactly one finding per category in the provided categories list.
 2. category MUST be one of the allowed enum values exactly.
-3. status MUST reflect how the subcontract compares to the main contract for that topic:
-   - fully_flowed_down: equivalent obligation transferred
+3. status reflects how the Related contract compares to the Primary for that topic:
+   - fully_flowed_down: equivalent obligation or protection aligned
    - modified: present but materially different terms
-   - missing: main requires it; subcontract silent or absent in dossier
-   - weaker: subcontract obligation is less strict than main (exposure for main contractor)
-   - stronger: subcontract is stricter than main
-   - conflict: incompatible terms (e.g. different completion dates)
-4. risk_level: critical | high | medium | low | informational — based on commercial/legal exposure to the main contractor.
-5. main_clause_id and sub_clause_id MUST be UUID strings copied ONLY from the dossier bundles for that side, or null if not found in dossier.
-6. main_citation / sub_citation: short human label e.g. "Clause 12.4"; use null (not any string) if the side has no item for this category — the UI localises the "Not Found" message.
-7. You MUST always return BOTH languages for every finding:
-   - explanation_ar and explanation_en (professional legal Arabic and English prose of the same meaning)
-   - recommendation_ar and recommendation_en (concrete actionable advice in both languages)
-   Never leave a language empty. If dossier is thin, still write a short honest sentence in each language.
-8. confidence 0..1 — honest; below 0.7 means uncertain dossier coverage.
-9. NEVER invent clause_ids. If dossier has no item for a side, clause_id null and citation null.
-10. When both sides have no dossier items for a category, status=fully_flowed_down, risk_level=informational, both clause_ids null, and the explanation/recommendation in both languages should state that neither contract addresses this category.
+   - missing: Primary requires it; Related silent or absent in dossier
+   - weaker: Related obligation/protection is less strict (exposure for Primary party)
+   - stronger: Related is stricter than Primary
+   - conflict: incompatible terms
+4. risk_level: critical | high | medium | low | informational — based on commercial/legal exposure.
+5. main_clause_id and sub_clause_id MUST be UUID strings from the Primary and Related dossiers only, or null.
+6. main_citation / sub_citation: short label e.g. "Clause 12.4"; null if no dossier item.
+7. explanation_ar, explanation_en, recommendation_ar, recommendation_en — both languages always, same meaning.
+8. confidence 0..1 — honest.
+9. NEVER invent clause_ids.
+10. When both sides lack dossier items for a category, status=fully_flowed_down, risk_level=informational, clause_ids null.
 """
 
 
 def build_flowdown_user_prompt(main_dossier: dict, sub_dossier: dict) -> str:
     payload = {
         "categories": FLOWDOWN_CATEGORIES,
-        "main": main_dossier,
-        "sub": sub_dossier,
+        "primary": main_dossier,
+        "related": sub_dossier,
     }
     return (
-        "Compare the main contract dossier to the subcontract dossier. "
+        "Compare the Primary contract dossier to the Related contract dossier. "
         "Return one finding object per category.\n\n"
         f"{json.dumps(payload, ensure_ascii=False, default=str)}"
     )

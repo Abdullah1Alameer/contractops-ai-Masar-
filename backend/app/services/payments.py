@@ -17,8 +17,11 @@ def _mark_jsonb_dirty(instance, attr: str) -> None:
     except (AttributeError, Exception):
         pass
 
-from ..models import Clause, Contract, DemoSettings, Extraction, PaymentMilestone
+from ..models import Clause, Contract, DemoSettings, Event, Extraction, PaymentMilestone
 from ..services.dates import parse_date_raw
+from .date_semantics import sync_contract_date_semantics
+from .temporal_inference import detect_day_of_month_due_rule
+from .temporal_rules import compute_next_day_of_month, compute_recurrence_occurrences
 
 _ADVANCE = re.compile(r"دفعة\s*مقدمة|advance\s*payment|down\s*payment|مقدم", re.I)
 _RETENTION = re.compile(r"احتجاز|محتجز|retention", re.I)
@@ -34,7 +37,20 @@ _PRE_CERT = re.compile(r"شهادة|certificate", re.I)
 _PRE_COMPLETION = re.compile(r"إنجاز|إكمال|completion|delivery|work\s*completed", re.I)
 _PRE_INVOICE = re.compile(r"فاتورة|invoice|claim\s*submission", re.I)
 
-_STATUS_ORDER = {"overdue": 0, "claimable": 1, "blocked": 2, "needs_review": 3, "paid": 4}
+_STATUS_ORDER = {
+    "overdue": 0,
+    "due": 1,
+    "claimable": 2,
+    "blocked": 3,
+    "scheduled": 4,
+    "inactive": 5,
+    "needs_review": 6,
+    "paid": 7,
+}
+
+_COMPONENT_LABELS = frozenset(
+    {"basic wage", "housing allowance", "transportation allowance", "transport allowance"}
+)
 
 
 def get_demo_today(db: Session) -> date:
@@ -55,6 +71,12 @@ def stable_precondition_id(contract_id, seq: int, label: str) -> str:
 
 def classify_payment_type(label: str, quote: str = "") -> str:
     text = f"{label or ''} {quote or ''}"
+    if re.search(r"salary|wage|أجر|راتب", text, re.I):
+        if re.search(r"total\s+wage|أجر.*إجمال|total wage", text, re.I):
+            return "salary"
+        if re.search(r"allowance|بدل", text, re.I):
+            return "allowance"
+        return "salary"
     if _ADVANCE.search(text):
         return "advance_payment"
     if _RETENTION.search(text):
@@ -144,9 +166,41 @@ def _needs_review_row(row: PaymentMilestone) -> bool:
     return False
 
 
+def _classify_component_role(items: list[dict]) -> dict[int, tuple[str, int | None]]:
+    """Return seq -> (role, parent_seq)."""
+    by_label = {int(it.get("seq", 0)): (it.get("label") or "").strip().lower() for it in items if it.get("seq")}
+    total_seq = None
+    for seq, lbl in by_label.items():
+        if "total wage" in lbl or "إجمال" in lbl:
+            total_seq = seq
+            break
+    out: dict[int, tuple[str, int | None]] = {}
+    for seq, lbl in by_label.items():
+        if seq == total_seq:
+            out[seq] = ("total", None)
+        elif total_seq and lbl in _COMPONENT_LABELS:
+            out[seq] = ("component", total_seq)
+        else:
+            out[seq] = ("standalone", None)
+    return out
+
+
+def _trigger_fired(row: PaymentMilestone, events: list | None = None) -> bool:
+    if not row.trigger_event:
+        return True
+    if not events:
+        return False
+    for ev in events:
+        if (ev.type or "").lower() in ("termination", "contract_termination", row.trigger_event):
+            return True
+    return False
+
+
 def compute_payment_status_and_readiness(
     row: PaymentMilestone,
     today: date,
+    *,
+    events: list | None = None,
 ) -> tuple[str, int, bool, list[str]]:
     """Returns (status, readiness_percentage, claimable, missing_precondition_labels)."""
     pre = row.preconditions if isinstance(row.preconditions, list) else []
@@ -162,16 +216,37 @@ def compute_payment_status_and_readiness(
     if row.paid:
         return "paid", 100, False, []
 
+    if getattr(row, "role", None) == "component":
+        return "scheduled", 100, False, missing
+
     if _needs_review_row(row):
         return "needs_review", 0, False, missing
 
-    if row.due_date and row.due_date < today:
+    due = getattr(row, "next_due_date", None) or row.due_date
+    trigger = getattr(row, "trigger_event", None)
+    if trigger and not _trigger_fired(row, events):
+        return "inactive", readiness, False, missing
+
+    if due is None and trigger is None and not getattr(row, "due_rule", None):
+        return "needs_review", readiness, False, missing
+
+    if due and due > today:
+        if required and len(completed) < len(required):
+            return "blocked", readiness, False, missing
+        return "scheduled", readiness, False, missing
+
+    if due and due < today:
         return "overdue", readiness, False, missing
+
+    if due and due <= today:
+        if required and len(completed) < len(required):
+            return "blocked", readiness, False, missing
+        return "due", readiness, True, missing
 
     if required and len(completed) < len(required):
         return "blocked", readiness, False, missing
 
-    return "claimable", 100, True, []
+    return "needs_review", readiness, False, missing
 
 
 def _effective_amount_sar(row: PaymentMilestone, contract: Contract | None) -> float:
@@ -201,12 +276,21 @@ def build_payment_milestones_for_contract(contract_id, db: Session) -> list[Paym
     if contract is None:
         raise ValueError("contract_not_found")
 
+    sync_contract_date_semantics(contract, db)
+    due_rule_global = detect_day_of_month_due_rule(contract.raw_text)
+
     extractions = db.query(Extraction).filter_by(contract_id=contract_id).all()
     items: list[dict] = []
     for e in extractions:
         if e.field_name == "payment_milestones" and isinstance(e.value_json, list):
             items = e.value_json
             break
+
+    roles = _classify_component_role([it for it in items if isinstance(it, dict)])
+    events = db.query(Event).filter_by(contract_id=contract_id).all()
+    today = get_demo_today(db)
+    period_start = contract.commencement_date or contract.start_date
+    period_end = contract.end_date
 
     existing_rows = {
         (m.seq): m
@@ -230,6 +314,8 @@ def build_payment_milestones_for_contract(contract_id, db: Session) -> list[Paym
         label = item.get("label") or f"Payment {seq_int}"
         quote = item.get("quote") or ""
         ptype = classify_payment_type(label, quote)
+        if ptype == "other" and re.search(r"monthly", quote, re.I):
+            ptype = "salary" if "total" in label.lower() else "allowance"
         clause_id = _clause_uuid(item)
         amount_pct = item.get("amount_pct")
         amount_sar = item.get("amount_sar")
@@ -239,6 +325,18 @@ def build_payment_milestones_for_contract(contract_id, db: Session) -> list[Paym
         raw_pre = item.get("preconditions")
         if not isinstance(raw_pre, list):
             raw_pre = []
+
+        role, parent_seq = roles.get(seq_int, ("standalone", None))
+        frequency = item.get("frequency") or ("monthly" if re.search(r"monthly", quote, re.I) else None)
+        due_rule = item.get("due_rule") if isinstance(item.get("due_rule"), dict) else due_rule_global
+        next_due = None
+        if due_rule and role != "component":
+            next_due = compute_next_day_of_month(today, int(due_rule.get("day", 30)))
+            if period_end and next_due > period_end:
+                next_due = None
+            if period_start and next_due and next_due < period_start:
+                occ = compute_recurrence_occurrences(period_start, period_end, due_rule, today, limit=1)
+                next_due = occ[0] if occ else next_due
 
         prev = existing_rows.get(seq_int)
         if prev and not prev.generated:
@@ -254,22 +352,44 @@ def build_payment_milestones_for_contract(contract_id, db: Session) -> list[Paym
 
         paid = prev.paid if prev else False
         paid_at = prev.paid_at if prev else None
-        today = get_demo_today(db)
+
+        calc_en = None
+        calc_ar = None
+        if due_rule and next_due:
+            calc_en = f"Monthly payment due on day {due_rule.get('day')} of each month; next due: {next_due.isoformat()}."
+            calc_ar = f"الاستحقاق الشهري يوم {due_rule.get('day')} من كل شهر؛ الموعد التالي: {next_due.isoformat()}."
+
+        common = dict(
+            type=ptype,
+            label=label,
+            description=quote[:500] if quote else None,
+            amount_sar=amount_sar,
+            amount_percentage=amount_pct,
+            due_date=due or next_due,
+            next_due_date=next_due,
+            preconditions=merged_pre,
+            confidence=conf,
+            source_clause_id=clause_id,
+            paid=paid,
+            paid_at=paid_at,
+            role=role,
+            parent_seq=parent_seq,
+            frequency=frequency,
+            due_rule=due_rule,
+            period_start=period_start,
+            period_end=period_end,
+            responsible_party=item.get("responsible_party") or "first_party",
+            beneficiary=item.get("beneficiary") or "second_party",
+            trigger_event=item.get("trigger_event"),
+            calculation_explanation=calc_en,
+            calculation_explanation_ar=calc_ar,
+        )
 
         if prev and prev.generated:
-            prev.type = ptype
-            prev.label = label
-            prev.description = quote[:500] if quote else None
-            prev.amount_sar = amount_sar
-            prev.amount_percentage = amount_pct
-            prev.due_date = due
-            prev.preconditions = merged_pre
-            prev.confidence = conf
-            prev.source_clause_id = clause_id
-            prev.paid = paid
-            prev.paid_at = paid_at
+            for k, v in common.items():
+                setattr(prev, k, v)
             prev.updated_at = datetime.now(timezone.utc)
-            st, _, _, _ = compute_payment_status_and_readiness(prev, today)
+            st, _, _, _ = compute_payment_status_and_readiness(prev, today, events=events)
             prev.status = st
             result.append(prev)
         else:
@@ -277,20 +397,10 @@ def build_payment_milestones_for_contract(contract_id, db: Session) -> list[Paym
                 id=_uuid.uuid4(),
                 contract_id=contract_id,
                 seq=seq_int,
-                type=ptype,
-                label=label,
-                description=quote[:500] if quote else None,
-                amount_sar=amount_sar,
-                amount_percentage=amount_pct,
-                due_date=due,
-                preconditions=merged_pre,
-                paid=paid,
-                paid_at=paid_at,
-                confidence=conf,
                 generated=True,
-                source_clause_id=clause_id,
+                **common,
             )
-            st, _, _, _ = compute_payment_status_and_readiness(m, today)
+            st, _, _, _ = compute_payment_status_and_readiness(m, today, events=events)
             m.status = st
             db.add(m)
             result.append(m)
@@ -310,6 +420,7 @@ def serialize_milestone(
     clause: Clause | None,
 ) -> dict:
     status, readiness, claimable, missing = compute_payment_status_and_readiness(row, today)
+    claimable = claimable and status in ("due", "claimable")
 
     quote = (extr_item or {}).get("quote") or (clause.quote if clause else None)
     clause_ref = (extr_item or {}).get("clause_ref") or (clause.clause_ref if clause else None)
@@ -334,6 +445,18 @@ def serialize_milestone(
         "amount_sar": amount_sar,
         "amount_percentage": amount_pct,
         "due_date": row.due_date.isoformat() if row.due_date else None,
+        "next_due_date": row.next_due_date.isoformat() if row.next_due_date else None,
+        "frequency": row.frequency,
+        "due_rule": row.due_rule,
+        "role": row.role,
+        "parent_seq": row.parent_seq,
+        "responsible_party": row.responsible_party,
+        "beneficiary": row.beneficiary,
+        "trigger_event": row.trigger_event,
+        "calculation_explanation": row.calculation_explanation,
+        "calculation_explanation_ar": row.calculation_explanation_ar,
+        "period_start": row.period_start.isoformat() if row.period_start else None,
+        "period_end": row.period_end.isoformat() if row.period_end else None,
         "status": status,
         "readiness_percentage": readiness,
         "claimable": claimable,
@@ -385,12 +508,14 @@ def payments_summary(milestones: list[dict], contract: Contract | None) -> dict:
     needs_review_count = 0
 
     for m in milestones:
+        if m.get("role") == "component":
+            continue
         amt = m.get("amount_sar")
         if amt is None and contract and m.get("amount_percentage") and contract.value_sar:
             amt = float(contract.value_sar) * float(m["amount_percentage"]) / 100.0
         amt = float(amt or 0)
         st = m.get("status")
-        if st == "claimable":
+        if st in ("claimable", "due"):
             claimable_sar += amt
         elif st == "blocked":
             blocked_sar += amt

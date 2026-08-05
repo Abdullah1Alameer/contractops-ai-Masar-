@@ -6,7 +6,7 @@ import UnsupportedContractWarning from "@/components/UnsupportedContractWarning"
 import { useToast } from "@/components/feedback/ToastProvider";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
-import { api, ApiError, uploadContract, type ExtractResult } from "@/lib/api";
+import { api, ApiError, reclassifyContract, uploadContract, type ExtractResult } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -20,7 +20,7 @@ const ERROR_KEYS: Record<string, TKey> = {
   ai_failed: "upload.err.ai",
 };
 
-type Blocked = { category: string; confidence?: number; message?: string };
+type Blocked = { category: string; confidence?: number; message?: string; contractId?: string };
 
 export default function UploadPage() {
   const { t } = useI18n();
@@ -32,6 +32,7 @@ export default function UploadPage() {
   const [errorKey, setErrorKey] = useState<TKey | null>(null);
   const [dragging, setDragging] = useState(false);
   const [blocked, setBlocked] = useState<Blocked | null>(null);
+  const [reclassifying, setReclassifying] = useState(false);
 
   const pick = (f: File | undefined | null) => {
     setErrorKey(null);
@@ -65,6 +66,7 @@ export default function UploadPage() {
           category: result.contract_category ?? "Unknown",
           confidence: result.confidence,
           message: result.message,
+          contractId: result.contract_id,
         });
         setFile(null);
         return;
@@ -80,6 +82,30 @@ export default function UploadPage() {
     }
   };
 
+  const handleReclassify = async (category: string) => {
+    if (!blocked?.contractId) return;
+    setReclassifying(true);
+    try {
+      const { extraction } = await reclassifyContract(blocked.contractId, category);
+      if (extraction.supported !== false) {
+        toast.success(t("toast.uploadSuccess"));
+        router.push(`/contracts/${blocked.contractId}`);
+        return;
+      }
+      setBlocked({
+        ...blocked,
+        category: extraction.contract_category ?? category,
+        message: extraction.message,
+        confidence: extraction.confidence,
+      });
+    } catch (e) {
+      const code = e instanceof ApiError ? e.code : "unknown";
+      toast.error(t(ERROR_KEYS[code] ?? "common.error"));
+    } finally {
+      setReclassifying(false);
+    }
+  };
+
   if (blocked) {
     return (
       <div className="space-y-4">
@@ -87,6 +113,9 @@ export default function UploadPage() {
           category={blocked.category}
           message={blocked.message}
           confidence={blocked.confidence}
+          contractId={blocked.contractId}
+          onReclassify={blocked.contractId ? handleReclassify : undefined}
+          reclassifying={reclassifying}
         />
         <div className="mx-auto max-w-2xl">
           <Button variant="secondary" onClick={() => setBlocked(null)}>

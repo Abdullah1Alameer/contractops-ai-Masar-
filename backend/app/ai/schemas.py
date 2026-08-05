@@ -43,6 +43,37 @@ _DUE_DATE_RAW = {
     ]
 }
 
+_TEMPORAL_RULE = {
+    "anyOf": [
+        _obj({
+            "base_date_type": {"type": "string"},
+            "base_date": _nullable("string"),
+            "direction": {"type": "string"},
+            "offset_value": _nullable("integer"),
+            "offset_unit": _nullable("string"),
+            "computed_date": _nullable("string"),
+            "recurrence": _obj({
+                "frequency": {"type": "string"},
+                "day_of_month": _nullable("integer"),
+                "interval": _nullable("integer"),
+            }),
+            "trigger_event": _nullable("string"),
+            "condition_text": _nullable("string"),
+            "calculation_confidence": _nullable("number"),
+            "needs_review": {"type": "boolean"},
+            "review_reason": _nullable("string"),
+        }),
+        {"type": "null"},
+    ]
+}
+
+_DUE_RULE = {
+    "anyOf": [
+        _obj({"type": {"type": "string"}, "day": _nullable("integer")}),
+        {"type": "null"},
+    ]
+}
+
 EXTRACTION_SCHEMA = {
     "name": "contract_extraction",
     "strict": True,
@@ -53,6 +84,8 @@ EXTRACTION_SCHEMA = {
         "value_sar": _nullable("number"),
         "start_date_raw": _DATE_RAW_NULLABLE,
         "end_date_raw": _DATE_RAW_NULLABLE,
+        "commencement_date_raw": _DATE_RAW_NULLABLE,
+        "execution_date_raw": _DATE_RAW_NULLABLE,
         "governing_law": _nullable("string"),
         "retention_pct": _nullable("number"),
         "bond_expiry_raw": _DATE_RAW_NULLABLE,
@@ -69,6 +102,9 @@ EXTRACTION_SCHEMA = {
             "items": _obj({
                 "purpose": {"type": "string"},
                 "days": {"type": "integer"},
+                "responsible_party": _nullable("string"),
+                "beneficiary": _nullable("string"),
+                "temporal_rule": _TEMPORAL_RULE,
                 **_SOURCE_FIELDS,
                 "confidence": {"type": "number"},
             }),
@@ -77,10 +113,18 @@ EXTRACTION_SCHEMA = {
             "type": "array",
             "items": _obj({
                 "description": {"type": "string"},
+                "title": _nullable("string"),
                 "responsible_party": {"type": "string"},
+                "beneficiary": _nullable("string"),
                 "due_date_raw": _DUE_DATE_RAW,
                 "due_in_days": _nullable("integer"),
                 "penalty_text": _nullable("string"),
+                "trigger_type": _nullable("string"),
+                "trigger_event": _nullable("string"),
+                "temporal_rule": _TEMPORAL_RULE,
+                "contract_required_evidence": {"type": "array", "items": {"type": "string"}},
+                "suggested_evidence": {"type": "array", "items": {"type": "string"}},
+                "completion_criteria": _nullable("string"),
                 **_SOURCE_FIELDS,
                 "confidence": {"type": "number"},
             }),
@@ -92,6 +136,12 @@ EXTRACTION_SCHEMA = {
                 "label": {"type": "string"},
                 "amount_sar": _nullable("number"),
                 "amount_pct": _nullable("number"),
+                "frequency": _nullable("string"),
+                "due_rule": _DUE_RULE,
+                "responsible_party": _nullable("string"),
+                "beneficiary": _nullable("string"),
+                "trigger_event": _nullable("string"),
+                "temporal_rule": _TEMPORAL_RULE,
                 "preconditions": {"type": "array", "items": {"type": "string"}},
                 **_SOURCE_FIELDS,
                 "confidence": {"type": "number"},

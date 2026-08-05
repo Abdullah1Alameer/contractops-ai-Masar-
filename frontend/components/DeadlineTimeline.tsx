@@ -127,7 +127,17 @@ export default function DeadlineTimeline({
                   <Badge tone={statusTone(d.status)}>{t(`deadline.status.${d.status}` as TKey)}</Badge>
                 </div>
               </div>
-              {d.description && <p className="mt-1 text-sm text-gray-600">{d.description}</p>}
+              {d.status === "inactive" && (
+                <p className="mt-1 text-sm text-amber-800">{t("deadline.awaitingTrigger")}</p>
+              )}
+              {(d.calculation_explanation || d.description) && (
+                <p className="mt-1 text-sm text-gray-600">{d.calculation_explanation || d.description}</p>
+              )}
+              {d.source_trigger_date && (
+                <p className="mt-1 text-xs text-gray-500">
+                  {t("detail.noticeReference")}: <DualDate date={d.source_trigger_date} />
+                </p>
+              )}
               {d.event_date && (
                 <p className={cn("mt-2 text-sm", d.status === "missed" && "line-through text-gray-500")}>
                   <DualDate date={d.event_date} />
