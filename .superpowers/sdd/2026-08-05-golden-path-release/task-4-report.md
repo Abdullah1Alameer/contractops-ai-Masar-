@@ -92,3 +92,63 @@ Output:
 The existing project test configuration emits seven third-party deprecation warnings
 (FastAPI TestClient, Hijri converter, and PyMuPDF); they predate Task 4 and do not
 affect the passing lifecycle assertions.
+
+## Fix round 1
+
+### Findings addressed
+
+- Reworked public signer-open into the same locked request/contract/current-version
+  transaction model used by signing. It now rejects stale, expired, closed, and
+  out-of-order requests deterministically and persists `signature_viewed`.
+- Protected and public routers now map `SignatureError`, `LifecycleError`, and
+  `EmailDeliveryError` to their declared HTTP status and safe payload.
+- Failed delivery attempts bypass resend cooldown, so a failed invitation is immediately
+  retryable without altering the durable request/link.
+- Normalized signature creation stage checks through `normalize_stage`; read-only
+  `can_create` now evaluates canonical stage, current approved version, approved
+  workflow, unresolved negotiations, and active requests.
+- Added cancellation-reason submission and activation client action to the frontend.
+- Added persisted coverage for open/viewed, idempotent expiry, and authorized manual
+  activation (missing evidence, wrong role, valid signed-to-active flow).
+
+### Strict TDD evidence
+
+RED:
+
+```text
+pytest tests/test_outbound_messages.py::test_failed_delivery_does_not_start_resend_cooldown -q
+FAILED: EmailDeliveryError: email_resend_cooldown
+
+pytest tests/test_signature_lifecycle_integration.py::test_open_is_locked_current_and_emits_viewed_transition ... -q
+FAILED: expected signature_viewed activity event
+```
+
+GREEN focused:
+
+```text
+3 passed, 7 warnings
+```
+
+Full backend coverage:
+
+```text
+pytest tests/test_signature_lifecycle_integration.py tests/test_signature.py tests/test_lifecycle.py tests/test_approval_lifecycle_integration.py tests/test_outbound_messages.py -q
+101 passed, 3 skipped, 7 warnings in 221.50s
+```
+
+Frontend:
+
+```text
+npm test
+5 files passed, 20 tests passed
+```
+
+### Self-review
+
+- No direct stage mutation or legacy stage helper was reintroduced in the signature
+  service.
+- Open, sign, decline, resend, cancellation, expiry, and activation all use locked
+  contract/request/current-version paths before lifecycle mutation.
+- Existing skipped signature unit tests are legacy mock-only tests superseded by
+  persisted integration coverage; they remain explicitly marked while the canonical
+  behavior is exercised through real PostgreSQL/API paths.

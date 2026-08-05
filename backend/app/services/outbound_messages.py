@@ -288,6 +288,8 @@ def enforce_resend_cooldown(
     )
     if latest is None or latest.created_at is None:
         return
+    if latest.status == "failed":
+        return
     created_at = latest.created_at
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)

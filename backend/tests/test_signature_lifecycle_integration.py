@@ -369,3 +369,72 @@ def test_final_artifact_failure_rolls_back_completion_and_removes_orphan_signatu
         assert not (signature_service.storage.base_dir and key and __import__("os").path.exists(
             __import__("os").path.join(signature_service.storage.base_dir, key)
         ))
+
+
+def test_open_is_locked_current_and_emits_viewed_transition(signature_db):
+    db, create_contract = signature_db
+    contract, _ = create_contract()
+    client = TestClient(app)
+    created = _create(client, contract.id)
+    _send(client, created["request"]["id"])
+
+    opened = client.post(f"/api/public/sign/{created['signer_links'][0]['token']}/open")
+
+    assert opened.status_code == 200, opened.text
+    db.expire_all()
+    request = db.get(SignatureRequest, created["request"]["id"])
+    signer = db.query(SignatureSigner).filter_by(signature_request_id=request.id, signer_order=1).one()
+    assert request.status == "viewed"
+    assert signer.status == "opened"
+    assert "signature_viewed" in [event.event_type for event in _events(db, contract.id)]
+
+
+def test_expiry_closes_request_and_returns_stage_once(signature_db):
+    db, create_contract = signature_db
+    contract, _ = create_contract()
+    client = TestClient(app)
+    created = _create(client, contract.id)
+    _send(client, created["request"]["id"])
+    request = db.get(SignatureRequest, created["request"]["id"])
+    request.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db.commit()
+
+    first = client.get(f"/api/public/sign/{created['signer_links'][0]['token']}")
+    second = client.get(f"/api/public/sign/{created['signer_links'][0]['token']}")
+
+    assert first.status_code == second.status_code == 410
+    db.expire_all()
+    assert db.get(SignatureRequest, request.id).status == "expired"
+    assert db.get(Contract, contract.id).stage == "ready_to_sign"
+    assert [event.event_type for event in _events(db, contract.id)].count("signature_request_expired") == 1
+
+
+def test_manual_activation_requires_authorized_evidence_and_moves_signed_contract(signature_db):
+    db, create_contract = signature_db
+    contract, version = create_contract(stage="signed", version_status="signed")
+    request = SignatureRequest(
+        id=uuid4(), contract_id=contract.id, version_id=version.id, provider="simulated",
+        status="completed", subject="Executed", expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    db.add(request)
+    db.commit()
+    client = TestClient(app)
+
+    missing = client.post(f"/api/signature-requests/{request.id}/activate", headers=AUTH, json={"reason": ""})
+    forbidden = client.post(
+        f"/api/signature-requests/{request.id}/activate",
+        headers={**AUTH, "X-Demo-Role": "finance"},
+        json={"reason": "Effective", "evidence": "Record"},
+    )
+    activated = client.post(
+        f"/api/signature-requests/{request.id}/activate",
+        headers=AUTH,
+        json={"reason": "Effective", "evidence": "Record"},
+    )
+
+    assert missing.status_code == 422
+    assert forbidden.status_code == 403
+    assert activated.status_code == 200, activated.text
+    db.expire_all()
+    assert db.get(Contract, contract.id).stage == "active"
+    assert "contract_activated" in [event.event_type for event in _events(db, contract.id)]

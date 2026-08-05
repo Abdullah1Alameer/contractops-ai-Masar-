@@ -187,6 +187,23 @@ def test_latest_delivery_is_workflow_scoped(persisted_contract):
     assert latest_delivery(db, contract_id=uuid4(), message_type="review_invitation") is None
 
 
+def test_failed_delivery_does_not_start_resend_cooldown(persisted_contract):
+    db, contract = persisted_contract
+    attempt = _pending(db, contract)
+    db.commit()
+    record_delivery_result(
+        attempt.id,
+        EmailDeliveryResult("failed", None, "smtp_send_failed", None),
+        db,
+    )
+
+    enforce_resend_cooldown(
+        db,
+        contract_id=contract.id,
+        message_type="review_invitation",
+    )
+
+
 def test_cooldown_rejects_recent_resend(persisted_contract):
     db, contract = persisted_contract
     _pending(db, contract)

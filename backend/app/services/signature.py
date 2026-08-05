@@ -13,8 +13,10 @@ from ..config import REVIEW_BASE_URL
 from ..models import ApprovalWorkflow, Contract, ContractVersion, OutboundMessage, SignatureEvent, SignatureRequest, SignatureSigner
 from .approvals import log_activity
 from .lifecycle import (
+    ContractStage,
     LifecycleEvent,
     LifecycleService,
+    normalize_stage,
 )
 from .outbound_messages import (
     TokenMaterial,
@@ -322,7 +324,7 @@ def create_request(
         version = _locked_current_version(contract.id, db)
         if version is None:
             _raise(409, "current_version_required")
-        if contract.stage != "ready_to_sign":
+        if normalize_stage(contract.stage) != ContractStage.READY_TO_SIGN:
             _raise(409, "invalid_stage_transition")
         if version.status != "approved":
             _raise(409, "version_not_approved")
@@ -537,29 +539,40 @@ def build_public_payload(raw_token: str, db: Session) -> dict:
 
 
 def open_signer(raw_token: str, db: Session, *, ip: str | None, user_agent: str | None) -> dict:
-    signer = get_signer_by_token(raw_token, db)
-    if signer is None:
-        raise ValueError("not_found")
-    req = get_request_by_id(signer.signature_request_id, db)
-    if req is None:
-        raise ValueError("not_found")
-    expire_if_needed(req, db)
-    if req.status == "expired":
-        raise ValueError("expired")
-    signers = _signers_for(req.id, db)
-    if _waiting_for_prior(signer, signers, req.signing_order_enabled):
-        raise ValueError("not_active_signer")
-    if signer.status == "signed":
-        return build_public_payload(raw_token, db)
-    if not signer.opened_at:
-        signer.opened_at = _utcnow()
-        if signer.status == "invited":
-            signer.status = "opened"
-        if req.status == "sent":
-            req.status = "viewed"
-        log_activity(db, req.contract_id, "signature_link_opened", actor=signer.email)
-        log_sig_event(db, req.id, "signer_opened", signer_id=signer.id, actor=signer.email, metadata={"ip": ip})
-    db.commit()
+    try:
+        unlocked_signer = get_signer_by_token(raw_token, db)
+        if unlocked_signer is None:
+            _raise(404, "not_found")
+        req = _lock_request(unlocked_signer.signature_request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        signer = db.query(SignatureSigner).filter_by(id=unlocked_signer.id).with_for_update().one()
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if _expire_locked(req, contract, version, db):
+            _raise(410, "expired")
+        if req.status in TERMINAL_REQUEST_STATUSES:
+            _raise(409, "request_closed")
+        signers = _signers_for(req.id, db)
+        if not _signer_can_act(signer, req, signers):
+            _raise(409, "not_active_signer")
+        if not signer.opened_at:
+            signer.opened_at = _utcnow()
+            if signer.status == "invited":
+                signer.status = "opened"
+            if req.status == "sent":
+                req.status = "viewed"
+            _transition(db, contract, req, version, LifecycleEvent.SIGNATURE_VIEWED, actor=signer.email)
+            log_activity(db, req.contract_id, LifecycleEvent.SIGNATURE_VIEWED.value, actor=signer.email,
+                         metadata={"request_id": str(req.id), "signer_id": str(signer.id)})
+            log_activity(db, req.contract_id, "signature_link_opened", actor=signer.email,
+                         metadata={"request_id": str(req.id)})
+            log_sig_event(db, req.id, "signer_opened", signer_id=signer.id, actor=signer.email,
+                          metadata={"ip_present": bool(ip)})
+            _commit(db, req, signer)
+    except Exception:
+        db.rollback()
+        raise
     return build_public_payload(raw_token, db)
 
 
@@ -873,10 +886,23 @@ def get_contract_signature_bundle(contract_id, db: Session) -> dict:
         .first()
     )
     contract = db.get(Contract, contract_id)
-    can_create = bool(can_create_signature(contract) and get_active_request(contract_id, db) is None)
+    can_create = _can_create_request_readonly(contract, db)
     if req is None:
         return {"request": None, "events": [], "can_create": can_create}
     return {**serialize_request_bundle(req, db), "can_create": can_create}
+
+
+def _can_create_request_readonly(contract: Contract | None, db: Session) -> bool:
+    if contract is None or normalize_stage(contract.stage) != ContractStage.READY_TO_SIGN:
+        return False
+    from .versions import current_version
+    version = current_version(contract.id, db)
+    if version is None or version.status != "approved":
+        return False
+    if not _active_approved_workflow(contract.id, version.id, db):
+        return False
+    from .approvals import unresolved_negotiations
+    return not unresolved_negotiations(contract.id, db) and get_active_request(contract.id, db) is None
 
 
 def signature_summary(db: Session) -> dict:

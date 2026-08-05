@@ -391,8 +391,14 @@ export async function sendSignatureRequest(requestId: string) {
   return apiJson<import("./types").SignatureBundleResponse>(`/api/signature-requests/${requestId}/send`, "POST", {});
 }
 
-export async function cancelSignatureRequest(requestId: string) {
-  return apiJson<import("./types").SignatureBundleResponse>(`/api/signature-requests/${requestId}/cancel`, "POST", {});
+export async function cancelSignatureRequest(requestId: string, reason: string) {
+  return apiJson<import("./types").SignatureBundleResponse>(`/api/signature-requests/${requestId}/cancel`, "POST", { reason });
+}
+
+export async function activateSignatureRequest(requestId: string, reason: string, evidence: string) {
+  return apiJson<import("./types").SignatureBundleResponse>(
+    `/api/signature-requests/${requestId}/activate`, "POST", { reason, evidence }
+  );
 }
 
 export async function resendSignatureSigner(requestId: string, signerId: string) {

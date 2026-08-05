@@ -11,6 +11,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import {
   cancelSignatureRequest,
+  activateSignatureRequest,
   createSignatureRequest,
   downloadSignatureCertificate,
   downloadSignedPdf,
@@ -118,9 +119,11 @@ export default function SignaturePanel({
             size="sm"
             onClick={async () => {
               if (!req) return;
+              const reason = window.prompt(t("signature.cancel"));
+              if (!reason?.trim()) return;
               setBusy(true);
               try {
-                await cancelSignatureRequest(req.id);
+                await cancelSignatureRequest(req.id, reason.trim());
                 load();
               } finally {
                 setBusy(false);
@@ -132,6 +135,24 @@ export default function SignaturePanel({
         )}
         {req?.status === "completed" && (
           <>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={async () => {
+                const reason = window.prompt(t("signature.title"));
+                const evidence = reason ? window.prompt(t("signature.title")) : null;
+                if (!reason?.trim() || !evidence?.trim()) return;
+                setBusy(true);
+                try {
+                  await activateSignatureRequest(req.id, reason.trim(), evidence.trim());
+                  load();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Activate
+            </Button>
             <Button
               variant="secondary"
               size="sm"
