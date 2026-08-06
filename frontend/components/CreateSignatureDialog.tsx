@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import Button from "@/components/ui/Button";
 import { useI18n } from "@/lib/i18n";
@@ -33,8 +34,12 @@ export default function CreateSignatureDialog({
     { name: "", email: "", role: "company_signatory", order: 1 },
     { name: "", email: "", role: "client_signatory", order: 2 },
   ]);
+  // Portal target isn't available during SSR/first paint — see the
+  // rendering-fix note below.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
   const defaultExpiry = () => {
     const d = new Date();
@@ -45,10 +50,32 @@ export default function CreateSignatureDialog({
   const addSigner = () =>
     setSigners((s) => [...s, { name: "", email: "", role: "witness", order: s.length + 1 }]);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-6 shadow-xl">
-        <h3 className="mb-4 text-lg font-bold">{t("signature.create")}</h3>
+  // Rendering fix (layout/positioning only — no signature workflow logic
+  // touched): this dialog used `position: fixed`, but was mounted inline
+  // inside the contract page tree, under <PageTransition>'s framer-motion
+  // wrapper (components/shell/PageTransition.tsx). A CSS `transform` on
+  // any ancestor — which framer-motion applies to that wrapper for the
+  // route entrance animation — creates a new containing block for
+  // `position: fixed` descendants (CSS spec), so the dialog was being
+  // positioned/clipped relative to that (possibly scrolled, shorter-than-viewport)
+  // ancestor box instead of the real viewport: the backdrop still filled
+  // whatever it was contained by (looked "correct"), but the centered
+  // panel's top got clipped above the fold. Rendering through a portal to
+  // document.body — the same fix already used by ConfirmDialog
+  // (components/feedback/ConfirmDialog.tsx) — escapes that containing
+  // block entirely, so `fixed inset-0` is always relative to the real
+  // viewport regardless of any ancestor's transform/overflow/stacking
+  // context. z-[110] matches ConfirmDialog's tier so stacking order stays
+  // consistent across the app's portal-rendered dialogs.
+  return createPortal(
+    <div className="fixed inset-0 z-[110] flex items-center justify-center overflow-y-auto bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-signature-title"
+        className="my-auto max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
+      >
+        <h3 id="create-signature-title" className="mb-4 text-lg font-bold">{t("signature.create")}</h3>
         <label className="block text-sm font-medium">{t("signature.subject")}</label>
         <input className="mb-3 w-full rounded border px-3 py-2 text-sm" value={subject} onChange={(e) => setSubject(e.target.value)} />
         <label className="block text-sm font-medium">{t("signature.message")}</label>
@@ -110,6 +137,7 @@ export default function CreateSignatureDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
