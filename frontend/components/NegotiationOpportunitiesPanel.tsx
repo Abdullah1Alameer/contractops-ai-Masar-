@@ -3,11 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 import Badge from "@/components/ui/Badge";
-import EmptyState from "@/components/ui/EmptyState";
 import { fetchNegotiationOpportunities } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { NegotiationOpportunityRow } from "@/lib/types";
 
+// This is a *proactive*, AI-suggested "other clauses worth negotiating"
+// widget — a different, optional data source from the real, actionable
+// negotiation item(s) NegotiationPanel renders below it on the same tab.
+// It used to render a full-page EmptyState ("No structured negotiation
+// issue detected") whenever there were no suggestions, which read as if
+// the whole Negotiation tab were empty even when a real, active
+// negotiation was sitting right underneath (see docs/
+// negotiation-flow-bugfix-report.md, Bug 1). Having nothing to
+// proactively suggest is not itself noteworthy, so it now renders
+// nothing rather than a prominent empty state.
 export default function NegotiationOpportunitiesPanel({ contractId }: { contractId: string }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<NegotiationOpportunityRow[]>([]);
@@ -23,10 +32,7 @@ export default function NegotiationOpportunitiesPanel({ contractId }: { contract
 
   useEffect(load, [load]);
 
-  if (loading) return <p className="text-sm text-gray-500">{t("common.loading")}</p>;
-  if (!rows.length) {
-    return <EmptyState title={t("negotiation.noOpportunities")} />;
-  }
+  if (loading || !rows.length) return null;
 
   return (
     <div className="mb-6 space-y-3">

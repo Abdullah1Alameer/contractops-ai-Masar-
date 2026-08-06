@@ -99,7 +99,6 @@ const SECTIONS: { titleKey?: TKey; items: NavItem[] }[] = [
     items: [
       { href: "/reviews", key: "nav.reviews", icon: "reviews" },
       { href: "/negotiations", key: "nav.negotiations", icon: "negotiations" },
-      { href: "/negotiations/monitor", key: "nav.negotiationMonitor", icon: "negotiationMonitor" },
       { href: "/playbook", key: "nav.playbook", icon: "playbook" },
       { href: "/approvals", key: "nav.approvals", icon: "approvals" },
       { href: "/signatures", key: "nav.signatures", icon: "signatures" },

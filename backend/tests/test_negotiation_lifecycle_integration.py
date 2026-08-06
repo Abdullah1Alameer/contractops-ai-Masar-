@@ -662,3 +662,163 @@ def test_internal_agreement_override_rejects_stale_version(negotiation_db):
 
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "workflow_stale"
+
+
+# --- Negotiation bugfix round: unified board + "Adopt AI Recommendation" ---
+# See docs/negotiation-flow-bugfix-report.md.
+
+
+def test_board_excludes_terminal_items_and_buckets_summary_correctly(negotiation_db):
+    db, create_case = negotiation_db
+    _, _, _, pending = create_case(item_count=1)
+    _, _, _, waiting_client = create_case(item_count=1)
+    _, _, _, waiting_lawyer = create_case(item_count=1)
+    _, _, _, closed = create_case(item_count=1)
+
+    waiting_client[0].workflow_status = "sent_to_client"
+    waiting_client[0].sent_at = datetime.now(timezone.utc) - timedelta(days=1)
+    waiting_lawyer[0].workflow_status = "ready"
+    closed[0].workflow_status = "closed"
+    db.commit()
+
+    board = negotiation_service.negotiation_board(db)
+    ids = {item["negotiation_id"] for item in board["items"]}
+
+    assert str(pending[0].id) in ids
+    assert str(waiting_client[0].id) in ids
+    assert str(waiting_lawyer[0].id) in ids
+    assert str(closed[0].id) not in ids
+
+    by_id = {item["negotiation_id"]: item for item in board["items"]}
+    # "pending_analysis" (the seed default) still counts as awaiting the
+    # lawyer's first action — it has no "unassigned" state distinct from that.
+    assert by_id[str(pending[0].id)]["waiting_party"] == "lawyer"
+    assert by_id[str(waiting_client[0].id)]["waiting_party"] == "client"
+    assert by_id[str(waiting_lawyer[0].id)]["waiting_party"] == "lawyer"
+
+    summary = board["summary"]
+    assert summary["waiting_client"] >= 1
+    assert summary["waiting_lawyer"] >= 2
+    assert summary["total_active"] == len(board["items"])
+
+
+def test_board_message_count_matches_negotiation_messages(negotiation_db):
+    db, create_case = negotiation_db
+    _, _, review, negotiations = create_case()
+    client = TestClient(app)
+
+    with patch.object(negotiation_service, "complete_json", return_value=AI_RESULT):
+        _analyze(client, review.id)
+
+    board = negotiation_service.negotiation_board(db)
+    item = next(i for i in board["items"] if i["negotiation_id"] == str(negotiations[0].id))
+    assert item["message_count"] == 1
+
+
+def test_board_flags_stale_negotiation_against_current_version(negotiation_db):
+    db, create_case = negotiation_db
+    contract, version, _, negotiations = create_case()
+    negotiation = negotiations[0]
+    version.is_current = False
+    replacement = ContractVersion(
+        id=uuid4(),
+        contract_id=contract.id,
+        version_number=2,
+        version_label="v2",
+        parent_version_id=version.id,
+        source="manual_upload",
+        status="ready",
+        file_path="synthetic/replacement.pdf",
+        is_current=True,
+        created_by="synthetic-test",
+    )
+    db.add(replacement)
+    db.commit()
+
+    board = negotiation_service.negotiation_board(db)
+    item = next(i for i in board["items"] if i["negotiation_id"] == str(negotiation.id))
+    assert item["is_stale"] is True
+
+
+def test_board_overdue_sla_from_real_sent_at_and_missed_deadline(negotiation_db):
+    db, create_case = negotiation_db
+    contract, _, _, negotiations = create_case()
+    negotiation = negotiations[0]
+    negotiation.workflow_status = "sent_to_client"
+    negotiation.sent_at = datetime.now(timezone.utc) - timedelta(days=10)
+    db.commit()
+
+    board = negotiation_service.negotiation_board(db)
+    item = next(i for i in board["items"] if i["negotiation_id"] == str(negotiation.id))
+    assert item["days_waiting"] == 10
+    assert item["sla_status"] == "overdue"
+    assert board["summary"]["overdue"] >= 1
+
+
+def test_adopt_ai_recommendation_patch_persists_visible_proposal_fields(negotiation_db):
+    """Backs the "Adopt AI Recommendation" button: a single PATCH carrying
+    status + lawyer_final_clause(_ar) together, matching the exact shape the
+    frontend's adoptAiRecommendation() sends. Confirms the field the user
+    sees/edits is what actually gets persisted and approved in one call."""
+    db, create_case = negotiation_db
+    contract, _, _, negotiations = create_case()
+    negotiation = negotiations[0]
+    negotiation.workflow_status = "ready"
+    negotiation.counter_clause = AI_RESULT["counter_clause"]
+    negotiation.counter_clause_ar = AI_RESULT["arabic_counter_clause"]
+    db.commit()
+
+    response = TestClient(app).patch(
+        f"/api/negotiations/{negotiation.id}",
+        headers=AUTH,
+        json={
+            "status": "approved",
+            "lawyer_final_clause": AI_RESULT["counter_clause"],
+            "lawyer_final_clause_ar": AI_RESULT["arabic_counter_clause"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "approved"
+    assert body["lawyer_final_clause"] == AI_RESULT["counter_clause"]
+    assert body["lawyer_final_clause_ar"] == AI_RESULT["arabic_counter_clause"]
+
+    db.expire_all()
+    stored = db.get(Negotiation, negotiation.id)
+    assert stored.status == "approved"
+    assert stored.lawyer_final_clause == AI_RESULT["counter_clause"]
+    assert stored.lawyer_final_clause_ar == AI_RESULT["arabic_counter_clause"]
+    # Adopting does not itself dispatch anything to the client — only /send does.
+    assert stored.workflow_status == "edited_by_legal"
+    assert stored.sent_at is None
+    assert db.get(Contract, contract.id).stage == "negotiation"
+
+
+def test_adopted_recommendation_can_then_be_sent_as_counterproposal(negotiation_db):
+    """End of the Bug 2 flow: after Adopt AI Recommendation persists the
+    proposal and flips status to approved, /send must still work exactly as
+    before — the adoption did not lose or diverge from what gets sent."""
+    db, create_case = negotiation_db
+    _, _, _, negotiations = create_case()
+    negotiation = negotiations[0]
+    negotiation.workflow_status = "ready"
+    negotiation.counter_clause = AI_RESULT["counter_clause"]
+    negotiation.counter_clause_ar = AI_RESULT["arabic_counter_clause"]
+    db.commit()
+    client = TestClient(app)
+
+    adopt = client.patch(
+        f"/api/negotiations/{negotiation.id}",
+        headers=AUTH,
+        json={
+            "status": "approved",
+            "lawyer_final_clause": AI_RESULT["counter_clause"],
+            "lawyer_final_clause_ar": AI_RESULT["arabic_counter_clause"],
+        },
+    )
+    assert adopt.status_code == 200, adopt.text
+
+    send = client.post(f"/api/negotiations/{negotiation.id}/send", headers=AUTH)
+    assert send.status_code == 200, send.text
+    assert send.json()["negotiation"]["lawyer_final_clause"] == AI_RESULT["counter_clause"]

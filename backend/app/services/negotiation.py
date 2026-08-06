@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..ai.client import complete_json
@@ -17,6 +18,7 @@ from ..models import (
     Clause,
     Contract,
     ContractVersion,
+    Deadline,
     Negotiation,
     NegotiationMessage,
     NegotiationRound,
@@ -420,6 +422,10 @@ def serialize_negotiation(n: Negotiation, db: Session | None = None) -> dict:
             "ready" if n.workflow_status != "pending_analysis" else "pending"
         ),
         "human_decision_required": lifecycle.get("human_decision_required", True),
+        # Best-effort, not a real assignment feature — no assignment table
+        # exists. This is the legal actor who last edited this item's
+        # wording, if any (same heuristic negotiation_board() uses).
+        "assigned_lawyer": lifecycle.get("legal_edited_by"),
         "created_at": _iso(n.created_at),
         "updated_at": _iso(n.updated_at),
     }
@@ -668,6 +674,133 @@ def list_negotiations_for_contract(contract_id, db: Session) -> list[dict]:
         .all()
     )
     return [serialize_negotiation(n, db) for n in rows]
+
+
+# Waiting-party mapping for the unified Negotiations page — a negotiation
+# item's `workflow_status` already deterministically encodes whose turn it
+# is; no separate "assignment" field is needed or invented.
+_WAITING_ON_LAWYER = frozenset({"pending_analysis", "ready", "edited_by_legal", "client_responded"})
+_WAITING_ON_CLIENT = frozenset({"sent_to_client"})
+
+
+def _waiting_party(workflow_status: str) -> str | None:
+    if workflow_status in _WAITING_ON_CLIENT:
+        return "client"
+    if workflow_status in _WAITING_ON_LAWYER:
+        return "lawyer"
+    return None
+
+
+def negotiation_board(db: Session) -> dict:
+    """One row per active (non-terminal) negotiation item across every
+    contract, for the unified Negotiations page (replaces the separate
+    /negotiations list and /negotiations/monitor pages — see
+    docs/negotiation-flow-bugfix-report.md).
+
+    Every field here is read from a real, persisted column. Two fields
+    the design brief asked for have no backing schema and are
+    deliberately omitted rather than faked:
+      - "unread messages": NegotiationMessage rows exist (real message
+        count is included), but there is no read/unread column anywhere.
+      - a formal SLA policy: there is no sla_due_at/sla_hours field.
+        `days_waiting` is a real, derived value (now - sent_at); the
+        "approaching"/"overdue" bucketing uses a documented operational
+        threshold (3 / 7 days), not a stored policy.
+    """
+    from .versions import current_version
+
+    rows = (
+        db.query(Negotiation, Contract)
+        .join(Contract, Contract.id == Negotiation.contract_id)
+        .filter(Negotiation.workflow_status.notin_(("accepted", "closed")))
+        .order_by(Negotiation.updated_at.desc(), Negotiation.created_at.desc())
+        .all()
+    )
+    contract_ids = list({c.id for _, c in rows})
+
+    message_counts: dict = {}
+    if rows:
+        negotiation_ids = [n.id for n, _ in rows]
+        for negotiation_id, count in (
+            db.query(NegotiationMessage.negotiation_id, func.count(NegotiationMessage.id))
+            .filter(NegotiationMessage.negotiation_id.in_(negotiation_ids))
+            .group_by(NegotiationMessage.negotiation_id)
+            .all()
+        ):
+            message_counts[negotiation_id] = count
+
+    deadline_flags: dict = {}
+    if contract_ids:
+        for contract_id, critical_count, missed_count in (
+            db.query(
+                Deadline.contract_id,
+                func.sum(case((Deadline.severity == "critical", 1), else_=0)),
+                func.sum(case((Deadline.status == "missed", 1), else_=0)),
+            )
+            .filter(Deadline.contract_id.in_(contract_ids))
+            .group_by(Deadline.contract_id)
+            .all()
+        ):
+            deadline_flags[contract_id] = {
+                "critical_deadlines": int(critical_count or 0),
+                "missed_deadlines": int(missed_count or 0),
+            }
+
+    now = _utcnow()
+    items: list[dict] = []
+    for neg, c in rows:
+        current = current_version(c.id, db)
+        is_stale = current is None or str(neg.version_id) != str(current.id if current else None)
+        days_waiting = (now - neg.sent_at).days if neg.sent_at else None
+        sla_status = None
+        if neg.workflow_status == "sent_to_client" and days_waiting is not None:
+            sla_status = "overdue" if days_waiting > 7 else "approaching" if days_waiting > 3 else "ok"
+        lifecycle_meta = neg.final_summary.get("lifecycle") if isinstance(neg.final_summary, dict) else None
+        deadlines = deadline_flags.get(c.id, {"critical_deadlines": 0, "missed_deadlines": 0})
+        items.append(
+            {
+                "negotiation_id": str(neg.id),
+                "contract_id": str(c.id),
+                "contract_title": c.title,
+                "counterparty": c.party_b,
+                "clause_ref": neg.clause_ref,
+                "issue": neg.reviewer_comment,
+                "workflow_status": neg.workflow_status,
+                "editing_status": neg.status,
+                "contract_stage": c.stage,
+                "risk_level": neg.risk_level,
+                "recommendation": neg.recommendation,
+                # Best-effort, not a real assignment feature: the legal
+                # actor who last edited this item's wording, if any.
+                "assigned_lawyer": (lifecycle_meta or {}).get("legal_edited_by"),
+                "waiting_party": _waiting_party(neg.workflow_status),
+                "message_count": message_counts.get(neg.id, 0),
+                "sent_at": _iso(neg.sent_at),
+                "updated_at": _iso(neg.updated_at),
+                "days_waiting": days_waiting,
+                "sla_status": sla_status,
+                "critical_deadlines": deadlines["critical_deadlines"],
+                "missed_deadlines": deadlines["missed_deadlines"],
+                "is_stale": is_stale,
+            }
+        )
+
+    def _bucket(item: dict) -> str:
+        if item["waiting_party"] == "client":
+            return "waiting_client"
+        if item["waiting_party"] == "lawyer":
+            return "waiting_lawyer"
+        return "pending"
+
+    summary = {
+        "total_active": len(items),
+        "pending": sum(1 for i in items if _bucket(i) == "pending"),
+        "waiting_client": sum(1 for i in items if _bucket(i) == "waiting_client"),
+        "waiting_lawyer": sum(1 for i in items if _bucket(i) == "waiting_lawyer"),
+        "high_risk": sum(1 for i in items if i["risk_level"] in ("high", "critical")),
+        "overdue": sum(1 for i in items if i["sla_status"] == "overdue" or i["missed_deadlines"] > 0),
+    }
+    return {"items": items, "summary": summary}
 
 
 def apply_patch(

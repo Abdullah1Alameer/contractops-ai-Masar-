@@ -590,6 +590,7 @@ export interface NegotiationRow {
   next_allowed_actions?: string[];
   analysis_status?: string;
   human_decision_required?: boolean;
+  assigned_lawyer?: string | null;
 }
 
 export interface NegotiationCandidate {
@@ -605,6 +606,44 @@ export interface NegotiationCandidate {
 export interface NegotiationsResponse {
   negotiations: NegotiationRow[];
   candidates: NegotiationCandidate[];
+}
+
+export interface NegotiationBoardItem {
+  negotiation_id: string;
+  contract_id: string;
+  contract_title: string | null;
+  counterparty: string | null;
+  clause_ref: string | null;
+  issue: string | null;
+  workflow_status: string;
+  editing_status: string;
+  contract_stage: string | null;
+  risk_level: string | null;
+  recommendation: string | null;
+  assigned_lawyer: string | null;
+  waiting_party: "client" | "lawyer" | null;
+  message_count: number;
+  sent_at: string | null;
+  updated_at: string | null;
+  days_waiting: number | null;
+  sla_status: "ok" | "approaching" | "overdue" | null;
+  critical_deadlines: number;
+  missed_deadlines: number;
+  is_stale: boolean;
+}
+
+export interface NegotiationBoardSummary {
+  total_active: number;
+  pending: number;
+  waiting_client: number;
+  waiting_lawyer: number;
+  high_risk: number;
+  overdue: number;
+}
+
+export interface NegotiationBoardResponse {
+  items: NegotiationBoardItem[];
+  summary: NegotiationBoardSummary;
 }
 
 export interface SendNegotiationResponse {

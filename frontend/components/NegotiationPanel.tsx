@@ -23,7 +23,7 @@ import {
 } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { NegotiationCandidate, NegotiationRow } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 const AGREEMENT_OVERRIDE_ROLES = new Set(["legal", "executive"]);
 
@@ -37,6 +37,20 @@ function riskTone(r: string | null): "success" | "warning" | "orange" | "danger"
 
 function wsKey(ws: string): TKey {
   return `negotiation.workflow.${ws}` as TKey;
+}
+
+const WAITING_ON_CLIENT = new Set(["sent_to_client"]);
+const WAITING_ON_LAWYER = new Set(["pending_analysis", "ready", "edited_by_legal", "client_responded"]);
+
+function waitingStateKey(workflowStatus: string | undefined): TKey | null {
+  if (!workflowStatus) return null;
+  if (WAITING_ON_CLIENT.has(workflowStatus)) return "negotiation.waitingOn.client";
+  if (WAITING_ON_LAWYER.has(workflowStatus)) return "negotiation.waitingOn.lawyer";
+  return null;
+}
+
+function candidateKey(c: NegotiationCandidate): string {
+  return `${c.review_id}-${c.comment_id ?? "overall"}`;
 }
 
 function recKey(r: string | null): TKey {
@@ -102,6 +116,14 @@ function NegotiationResult({
     setFinalAr(row.lawyer_final_clause_ar ?? "");
   }, [row]);
 
+  // Derived (not a local flag that a refetch would silently wipe): true once
+  // the persisted lawyer proposal exactly matches what the AI proposed and
+  // hasn't been edited away from it since.
+  const adopted =
+    !!row.lawyer_final_clause &&
+    row.lawyer_final_clause === row.counter_clause &&
+    (row.lawyer_final_clause_ar || "") === (row.counter_clause_ar || "");
+
   const save = async (patch: Partial<NegotiationRow>) => {
     setBusy(true);
     try {
@@ -122,6 +144,37 @@ function NegotiationResult({
       lawyer_final_clause: finalEn || undefined,
       lawyer_final_clause_ar: finalAr || undefined,
     });
+
+  // Bug fix: "Adopt AI Recommendation" used to only PATCH the invisible
+  // `status` field to "approved" — the visible lawyer proposal textareas
+  // (finalEn/finalAr) were never touched, so clicking it looked like it did
+  // nothing (only manually typing into the textarea produced any visible
+  // change). Now it copies the AI's counter_clause into the same visible,
+  // editable fields the lawyer would type into, persists that together with
+  // the approval in one call (this repo's existing "Approve" action already
+  // saves immediately — see `save()` above — so this doesn't change when
+  // persistence happens), and gives explicit feedback. It never calls
+  // sendNegotiationUpdated(), so nothing is sent to the client here.
+  const adoptAiRecommendation = async () => {
+    const en = draft.counter_clause ?? "";
+    const ar = draft.counter_clause_ar ?? "";
+    setFinalEn(en);
+    setFinalAr(ar);
+    setBusy(true);
+    try {
+      await patchNegotiation(row.id, {
+        status: "approved",
+        lawyer_final_clause: en || undefined,
+        lawyer_final_clause_ar: ar || undefined,
+      } as any);
+      toast.success(t("negotiation.aiRecommendationAdopted"));
+      onUpdated();
+    } catch (error) {
+      toast.error(apiErrorCode(error, t("common.error")));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const copyText = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -359,24 +412,85 @@ function NegotiationResult({
       )}
 
       {row.actionable !== false && !row.is_stale && row.workflow_status !== "sent_to_client" && row.status !== "sent" && (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="primary" size="sm" loading={busy} onClick={() => save({ status: "approved" })}>
-            {t("negotiation.approve")}
-          </Button>
-          <Button variant="primary" size="sm" loading={busy} onClick={send}>
-            {t("negotiation.send")}
-          </Button>
-          {canRecordAgreement && (
-            <Button variant="primary" size="sm" loading={busy} onClick={recordAgreement}>
-              {t("negotiation.recordAgreement")}
-            </Button>
+        <div className="space-y-2">
+          {adopted && (
+            <p className="text-xs font-medium text-brand-700">{t("negotiation.aiRecommendationAdoptedBadge")}</p>
           )}
-          <Button variant="danger" size="sm" loading={busy} onClick={abandon}>
-            {t("negotiation.abandon")}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" size="sm" loading={busy} onClick={adoptAiRecommendation}>
+              {t("negotiation.approve")}
+            </Button>
+            <Button variant="primary" size="sm" loading={busy} onClick={send}>
+              {t("negotiation.send")}
+            </Button>
+            {canRecordAgreement && (
+              <Button variant="primary" size="sm" loading={busy} onClick={recordAgreement}>
+                {t("negotiation.recordAgreement")}
+              </Button>
+            )}
+            <Button variant="danger" size="sm" loading={busy} onClick={abandon}>
+              {t("negotiation.abandon")}
+            </Button>
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+// Compact summary card (Known Bug 1 / Bug 4): the tab must show, per
+// negotiation item, enough to act on or decide to open it, without forcing
+// the reader past an unrelated empty-state block (NegotiationOpportunitiesPanel,
+// above this) to find the one real, actionable negotiation.
+function NegotiationSummaryCard({
+  candidate,
+  selected,
+  highlighted,
+  onSelect,
+}: {
+  candidate: NegotiationCandidate;
+  selected: boolean;
+  highlighted: boolean;
+  onSelect: () => void;
+}) {
+  const { t, lang } = useI18n();
+  const neg = candidate.negotiation;
+  const waitingKey = neg ? waitingStateKey(neg.workflow_status) : null;
+
+  return (
+    <Card
+      className={cn(
+        "cursor-pointer transition-colors",
+        selected && "ring-2 ring-brand-600/50",
+        highlighted && !selected && "ring-2 ring-brand-500/40"
+      )}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e: React.KeyboardEvent) => (e.key === "Enter" || e.key === " ") && onSelect()}
+    >
+      <CardBody className="space-y-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-gray-900">
+              {candidate.clause_ref ? `${t("detail.clause")} ${candidate.clause_ref}` : t("negotiation.overallIssue")}
+            </p>
+            <p className="mt-0.5 line-clamp-2 text-xs text-gray-600">{candidate.reviewer_comment}</p>
+          </div>
+          {neg && <Badge tone="info">{t(wsKey(neg.workflow_status || "pending_analysis"))}</Badge>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+          {neg?.risk_level && <Badge tone={riskTone(neg.risk_level)}>{t(`negotiation.risk.${neg.risk_level}` as TKey)}</Badge>}
+          {neg?.confidence != null && <span>{t("negotiation.card.score")}: {Math.round(neg.confidence * 100)}%</span>}
+          <span>{t("negotiation.card.lawyer")}: {neg?.assigned_lawyer || "—"}</span>
+          <span>{t("negotiation.card.lastActivity")}: {neg?.updated_at ? formatDate(neg.updated_at, lang) : "—"}</span>
+        </div>
+        {waitingKey && <p className="text-xs font-medium text-amber-700">{t(waitingKey)}</p>}
+        <Button variant="secondary" size="sm" onClick={onSelect}>
+          {t("negotiation.card.openDetails")}
+        </Button>
+      </CardBody>
+    </Card>
   );
 }
 
@@ -399,6 +513,7 @@ export default function NegotiationPanel({
   const [candidates, setCandidates] = useState<NegotiationCandidate[]>([]);
   const [analyzingKey, setAnalyzingKey] = useState<string | null>(null);
   const [role, setRole] = useState("legal");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // Owned here, not in NegotiationResult: `onUpdated()` (passed to that
   // child) triggers `load()` below, which unmounts/remounts every candidate
   // card via the `loading` skeleton gate. This component instance does not
@@ -423,8 +538,20 @@ export default function NegotiationPanel({
     return () => window.removeEventListener(DEMO_ROLE_EVENT, onRoleChange);
   }, []);
 
+  // Auto-select the highlighted (deep-linked) item, else the first one,
+  // whenever the current selection no longer exists in the loaded list.
+  useEffect(() => {
+    if (candidates.length === 0) {
+      setSelectedKey(null);
+      return;
+    }
+    if (candidates.some((c) => candidateKey(c) === selectedKey)) return;
+    const highlighted = candidates.find((c) => c.negotiation?.id === highlightId);
+    setSelectedKey(candidateKey(highlighted ?? candidates[0]));
+  }, [candidates, highlightId, selectedKey]);
+
   const analyze = async (c: NegotiationCandidate) => {
-    const key = `${c.review_id}-${c.comment_id ?? "overall"}`;
+    const key = candidateKey(c);
     setAnalyzingKey(key);
     try {
       await analyzeNegotiation(c.review_id, c.comment_id);
@@ -437,7 +564,12 @@ export default function NegotiationPanel({
   };
 
   if (loading) return <SkeletonCard rows={3} />;
+  // Genuinely zero negotiation items for this contract — the only case the
+  // empty state should ever show (Known Bug 1's fix).
   if (candidates.length === 0) return <EmptyState title={t("negotiation.empty")} />;
+
+  const selected = candidates.find((c) => candidateKey(c) === selectedKey) ?? candidates[0];
+  const selectedNeg = selected.negotiation;
 
   return (
     <div className="space-y-4">
@@ -451,64 +583,46 @@ export default function NegotiationPanel({
           )}
         </div>
       )}
-      {candidates.map((c) => {
-        const key = `${c.review_id}-${c.comment_id ?? "overall"}`;
-        const neg = c.negotiation;
-        return (
-          <Card key={key} className={cn(c.negotiation?.id === highlightId && "ring-2 ring-brand-500/40")}>
-            <CardBody>
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="flex-1">
-                  {neg && (
-                    <Badge tone="info" className="mb-2">
-                      {t(wsKey(neg.workflow_status || "pending_analysis"))}
-                    </Badge>
-                  )}
-                  {c.clause_ref && (
-                    <p className="text-xs font-semibold text-brand-700">{c.clause_ref}</p>
-                  )}
-                  <p className="mt-1 text-sm font-medium text-gray-900">{t("negotiation.reviewerComment")}</p>
-                  <p className="text-sm text-gray-700">{c.reviewer_comment}</p>
-                </div>
-                <Badge tone={c.review_status === "rejected" ? "danger" : "warning"}>{c.review_status}</Badge>
-              </div>
-              {(neg?.original_clause || c.original_clause) && (
-                <div className="mt-3 rounded-lg border bg-muted-50/50 p-3">
-                  <p className="mb-1 text-xs font-semibold uppercase text-gray-500">{t("negotiation.originalClause")}</p>
-                  <p className="text-sm text-gray-800">{neg?.original_clause || c.original_clause}</p>
-                </div>
-              )}
-              {!neg?.ai_summary && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className="mt-4"
-                  loading={analyzingKey === key}
-                  onClick={() => analyze(c)}
-                >
-                  {analyzingKey === key ? t("negotiation.analyzing") : t("negotiation.analyze")}
-                </Button>
-              )}
-              {neg?.ai_summary && (
-                <NegotiationResult
-                  row={neg}
-                  lang={lang}
-                  contractStage={contractStage}
-                  role={role}
-                  onUpdated={load}
-                  onLifecycleChanged={onLifecycleChanged}
-                  onAgreementResolved={() => setAgreementResolved(true)}
-                  onRestart={
-                    neg.is_stale && c.review_id
-                      ? () => analyze(c)
-                      : undefined
-                  }
-                />
-              )}
-            </CardBody>
-          </Card>
-        );
-      })}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {candidates.map((c) => (
+          <NegotiationSummaryCard
+            key={candidateKey(c)}
+            candidate={c}
+            selected={candidateKey(c) === candidateKey(selected)}
+            highlighted={c.negotiation?.id === highlightId}
+            onSelect={() => setSelectedKey(candidateKey(c))}
+          />
+        ))}
+      </div>
+
+      {/* Selected negotiation's detail workspace — always directly below the
+          summary cards, never separated by an unrelated block. */}
+      <div id="negotiation-detail-workspace" className="border-t pt-4">
+        {(selected.original_clause || selectedNeg?.original_clause) && (
+          <div className="mb-3 rounded-lg border bg-muted-50/50 p-3">
+            <p className="mb-1 text-xs font-semibold uppercase text-gray-500">{t("negotiation.originalClause")}</p>
+            <p className="text-sm text-gray-800">{selectedNeg?.original_clause || selected.original_clause}</p>
+          </div>
+        )}
+        {!selectedNeg?.ai_summary && (
+          <Button variant="primary" size="sm" loading={analyzingKey === candidateKey(selected)} onClick={() => analyze(selected)}>
+            {analyzingKey === candidateKey(selected) ? t("negotiation.analyzing") : t("negotiation.analyze")}
+          </Button>
+        )}
+        {selectedNeg?.ai_summary && (
+          <NegotiationResult
+            row={selectedNeg}
+            lang={lang}
+            contractStage={contractStage}
+            role={role}
+            onUpdated={load}
+            onLifecycleChanged={onLifecycleChanged}
+            onAgreementResolved={() => setAgreementResolved(true)}
+            onRestart={selectedNeg.is_stale && selected.review_id ? () => analyze(selected) : undefined}
+          />
+        )}
+      </div>
     </div>
   );
 }

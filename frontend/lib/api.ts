@@ -306,6 +306,12 @@ export async function fetchNegotiations(contractId: string) {
   return api<import("./types").NegotiationsResponse>(`/api/contracts/${contractId}/negotiations`);
 }
 
+// Unified Negotiations page — one row per active negotiation item across
+// every contract. See backend/app/services/negotiation.py::negotiation_board.
+export async function fetchNegotiationBoard() {
+  return api<import("./types").NegotiationBoardResponse>("/api/negotiations/board");
+}
+
 export async function analyzeNegotiation(reviewId: string, commentId?: string | null) {
   return apiJson<import("./types").NegotiationRow>("/api/negotiation/analyze", "POST", {
     review_id: reviewId,

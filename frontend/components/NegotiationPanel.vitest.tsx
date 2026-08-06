@@ -272,3 +272,136 @@ describe("NegotiationPanel — Record Agreement Reached (authorized internal ove
     await waitFor(() => expect(toastError).toHaveBeenCalled());
   });
 });
+
+// --- Negotiation bugfix round: false empty state, summary/detail hierarchy,
+// and "اعتماد توصية الذكاء الاصطناعي". See docs/negotiation-flow-bugfix-report.md.
+
+describe("NegotiationPanel — Bug 1: never shows the empty state when a real negotiation exists", () => {
+  it("renders the summary card and detail workspace, not the empty state, for an active changes_requested negotiation", async () => {
+    fetchNegotiations.mockResolvedValue({ candidates: [candidate()] });
+    renderPanel();
+
+    // Default candidate already has an ai_summary, so it renders straight
+    // into the full detail workspace rather than an Analyze prompt.
+    await waitFor(() => expect(screen.getByText("بانتظار رد العميل")).toBeTruthy());
+    expect(screen.queryByText("لا توجد طلبات تفاوض بعد — تظهر هنا عند رفض العميل أو طلب التعديلات")).toBeNull();
+  });
+
+  it("shows the empty state only when zero negotiation items genuinely exist", async () => {
+    fetchNegotiations.mockResolvedValue({ candidates: [] });
+    renderPanel();
+
+    expect(
+      await screen.findByText("لا توجد طلبات تفاوض بعد — تظهر هنا عند رفض العميل أو طلب التعديلات")
+    ).toBeTruthy();
+  });
+});
+
+describe("NegotiationPanel — Bug 4: summary cards drive the detail workspace", () => {
+  it("selecting a different summary card swaps the detail workspace to match", async () => {
+    const first = candidate({
+      review_id: REVIEW_ID,
+      comment_id: "c1",
+      clause_ref: "1.1",
+      reviewer_comment: "First issue comment",
+      negotiation: negotiation({ id: NEGOTIATION_ID, clause_ref: "1.1", ai_summary: "First AI summary" }),
+    });
+    const secondId = "77777777-7777-7777-7777-777777777777";
+    const second = candidate({
+      review_id: REVIEW_ID,
+      comment_id: "c2",
+      clause_ref: "2.1",
+      reviewer_comment: "Second issue comment",
+      negotiation: negotiation({ id: secondId, clause_ref: "2.1", ai_summary: null, workflow_status: "pending_analysis" }),
+    });
+    fetchNegotiations.mockResolvedValue({ candidates: [first, second] });
+    renderPanel();
+
+    // First candidate auto-selected: its detail workspace (already analyzed) shows.
+    await waitFor(() => expect(screen.getByText("بانتظار رد العميل")).toBeTruthy());
+
+    fireEvent.click(screen.getAllByText("فتح التفاصيل")[1]);
+
+    // Second candidate has no ai_summary yet, so its workspace offers Analyze instead.
+    await waitFor(() => expect(screen.getByText("تحليل بالذكاء الاصطناعي")).toBeTruthy());
+  });
+});
+
+describe("NegotiationPanel — Bug 2: Adopt AI Recommendation makes a visible, editable change", () => {
+  it("copies the AI counter clause into the visible lawyer-proposal field and persists it via the existing approve action", async () => {
+    fetchNegotiations.mockResolvedValue({
+      candidates: [
+        candidate({
+          negotiation: negotiation({
+            workflow_status: "ready",
+            status: "draft",
+            counter_clause: "AI proposed wording",
+            counter_clause_ar: "صياغة مقترحة",
+            lawyer_final_clause: null,
+            lawyer_final_clause_ar: null,
+          }),
+        }),
+      ],
+    });
+    patchNegotiation.mockResolvedValue({});
+    renderPanel();
+
+    const [englishBox] = (await screen.findAllByRole("textbox")) as HTMLTextAreaElement[];
+    expect(englishBox.value).toBe("");
+
+    fireEvent.click(screen.getByText("اعتماد توصية الذكاء الاصطناعي"));
+
+    await waitFor(() => expect((englishBox as HTMLTextAreaElement).value).toBe("AI proposed wording"));
+    expect(patchNegotiation).toHaveBeenCalledWith(NEGOTIATION_ID, {
+      status: "approved",
+      lawyer_final_clause: "AI proposed wording",
+      lawyer_final_clause_ar: "صياغة مقترحة",
+    });
+    // Adopting is not sending — nothing goes out to the client from this click.
+    expect(sendNegotiationUpdated).not.toHaveBeenCalled();
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+  });
+
+  it("still allows editing the adopted text before it is sent", async () => {
+    // onUpdated() after the adopt PATCH triggers a real refetch in the parent
+    // (which remounts the workspace via the loading skeleton) — so, like the
+    // real backend, reflect the just-persisted fields on the second fetch.
+    const baseNegotiation = negotiation({
+      workflow_status: "ready",
+      status: "draft",
+      counter_clause: "AI proposed wording",
+      counter_clause_ar: null,
+      lawyer_final_clause: null,
+      lawyer_final_clause_ar: null,
+    });
+    fetchNegotiations
+      .mockResolvedValueOnce({ candidates: [candidate({ negotiation: baseNegotiation })] })
+      .mockResolvedValue({
+        candidates: [
+          candidate({
+            negotiation: { ...baseNegotiation, workflow_status: "edited_by_legal", status: "approved", lawyer_final_clause: "AI proposed wording" },
+          }),
+        ],
+      });
+    patchNegotiation.mockResolvedValue({});
+    renderPanel();
+
+    fireEvent.click(await screen.findByText("اعتماد توصية الذكاء الاصطناعي"));
+
+    await waitFor(() => {
+      const boxes = screen.getAllByRole("textbox") as HTMLTextAreaElement[];
+      expect(boxes[0].value).toBe("AI proposed wording");
+    });
+    const englishBox = screen.getAllByRole("textbox")[0] as HTMLTextAreaElement;
+
+    fireEvent.change(englishBox, { target: { value: "AI proposed wording, edited by lawyer" } });
+    fireEvent.blur(englishBox);
+
+    await waitFor(() =>
+      expect(patchNegotiation).toHaveBeenCalledWith(
+        NEGOTIATION_ID,
+        expect.objectContaining({ lawyer_final_clause: "AI proposed wording, edited by lawyer" })
+      )
+    );
+  });
+});

@@ -17,6 +17,7 @@ from ..services.negotiation import (
     apply_patch,
     list_negotiation_candidates,
     list_negotiations_for_contract,
+    negotiation_board,
     record_agreement_override,
     send_updated,
     serialize_negotiation,
@@ -83,6 +84,13 @@ def negotiation_analyze(
     except AIError:
         raise HTTPException(502, detail={"error": "ai_failed", "retryable": True})
     return serialize_negotiation(neg, db)
+
+
+@router.get("/negotiations/board")
+def get_negotiation_board(db: Session = Depends(get_db)):
+    """Backs the unified Negotiations page (replaces the separate
+    /negotiations list and /negotiations/monitor pages)."""
+    return negotiation_board(db)
 
 
 @router.get("/contracts/{contract_id}/negotiations")
