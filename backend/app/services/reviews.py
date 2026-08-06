@@ -39,6 +39,7 @@ from .outbound_messages import (
     serialize_delivery,
 )
 from .payments import list_payment_milestones_for_contract, payments_summary
+from .risk_engine import serialize_risk
 from . import versions as ver_svc
 
 DEFAULT_EXPIRY_DAYS = 14
@@ -333,6 +334,12 @@ def _contract_brief(c: Contract) -> dict:
 
 
 def _serialize_obligations(contract_id, db: Session) -> list[dict]:
+    """Same safe business fields the internal Obligations tab shows
+    (title, beneficiary, trigger, completion criteria, evidence) — none
+    of it is internal-only; it was previously trimmed to a narrower
+    subset here for no documented reason, which left it out of the
+    public portal's dedicated Obligations tab even though it was already
+    referenced in the AI summary counts."""
     clauses = {cl.id: cl for cl in db.query(Clause).filter_by(contract_id=contract_id)}
     out = []
     for o in db.query(Obligation).filter_by(contract_id=contract_id).order_by(Obligation.due_date.asc().nullslast()):
@@ -340,8 +347,15 @@ def _serialize_obligations(contract_id, db: Session) -> list[dict]:
         out.append(
             {
                 "id": str(o.id),
+                "title": o.title,
                 "description": o.description,
                 "responsible_party": o.responsible_party,
+                "beneficiary": o.beneficiary,
+                "trigger_type": o.trigger_type,
+                "trigger_event": o.trigger_event,
+                "completion_criteria": o.completion_criteria,
+                "contract_required_evidence": o.contract_required_evidence or [],
+                "suggested_evidence": o.suggested_evidence or [],
                 "due_date": o.due_date.isoformat() if o.due_date else None,
                 "penalty_text": o.penalty_text,
                 "status": o.status,
@@ -367,6 +381,24 @@ def _comparison_for_contract(contract_id, db: Session) -> dict | None:
     if row is None:
         return None
     return list_flowdown_for_pair(row.main_contract_id, row.subcontract_id, db)
+
+
+def _comparison_unavailable_reason(c: Contract, db: Session) -> str:
+    """Only consulted when `_comparison_for_contract` returned None.
+
+    Comparison here means the flowdown main/subcontract clause comparison
+    (see FlowdownFinding), not a diff between this contract's own versions
+    — that is a separate, unrelated concept (contract_versions +
+    versions.compare_versions) that this endpoint does not expose.
+    Distinguishes "never linked to a main/subcontract pair" from "linked,
+    but no comparison has been generated yet" so the empty state can say
+    the accurate thing instead of guessing at "another version required".
+    """
+    if c.parent_main_contract_id is not None:
+        linked = True
+    else:
+        linked = db.query(Contract.id).filter_by(parent_main_contract_id=c.id).first() is not None
+    return "not_yet_compared" if linked else "not_linked"
 
 
 def _penalties_from_extractions(contract_id, db: Session) -> list:
@@ -417,6 +449,16 @@ def build_ai_summary(
     return "\n".join(lines) if lines else "No summary available yet."
 
 
+def _severity_from_points(points: int) -> str:
+    if points >= 4:
+        return "critical"
+    if points >= 3:
+        return "high"
+    if points >= 2:
+        return "medium"
+    return "low"
+
+
 def build_risk_summary(
     contract_id,
     db: Session,
@@ -424,32 +466,80 @@ def build_risk_summary(
     comparison: dict | None,
     penalties: list,
 ) -> dict:
+    """Public-safe risk summary.
+
+    The score/level here are the exact `risk_engine.serialize_risk()`
+    values shown internally (`GET /contracts/{id}` -> `risk`) — the same
+    deterministic, explainable risk-v2 calculation, not a separate
+    computation. Every scoring item carries `contributes_to_score: True`
+    and traces back one-to-one to a `RiskFinding` row, so the visible
+    score is always backed by visible reasons.
+
+    Missed/critical-deadline and high-risk-comparison items are kept as
+    supplementary context (operational timing risk isn't part of the
+    risk-v2 score, which only covers items needing review) and are
+    explicitly marked `contributes_to_score: False` so the two kinds of
+    signal are never conflated. No internal-only notes, actor names, or
+    negotiation strategy are included — only the same category/code/
+    explanation fields already shown internally.
+    """
+    engine_risk = serialize_risk(contract_id, db)
     items: list[dict] = []
+    for f in engine_risk.get("findings") or []:
+        items.append(
+            {
+                "type": "finding",
+                "category": f.get("category"),
+                "label": (f.get("category") or "risk").replace("_", " ").title(),
+                "detail": f.get("explanation"),
+                "detail_ar": f.get("explanation_ar"),
+                "severity": _severity_from_points(f.get("points") or 0),
+                "link_tab": f.get("link_tab"),
+                "contributes_to_score": True,
+            }
+        )
     for p in penalties:
         items.append(
             {
                 "type": "penalty",
+                "category": "financial",
                 "label": p.get("type") or "Penalty",
                 "detail": p.get("rate") or p.get("cap") or "",
+                "detail_ar": None,
                 "severity": "medium",
+                "cap": p.get("cap"),
+                "rate": p.get("rate"),
+                "quote": p.get("quote"),
+                "clause_ref": p.get("clause_ref"),
+                "page": p.get("page"),
+                "link_tab": "risks",
+                "contributes_to_score": False,
             }
         )
     if timeline_summary.get("missed_or_time_barred", 0) > 0:
         items.append(
             {
                 "type": "deadline",
+                "category": "temporal",
                 "label": "Missed or time-barred deadlines",
                 "detail": str(timeline_summary.get("missed_or_time_barred")),
+                "detail_ar": None,
                 "severity": "high",
+                "link_tab": "timeline",
+                "contributes_to_score": False,
             }
         )
     if timeline_summary.get("critical", 0) > 0:
         items.append(
             {
                 "type": "deadline",
+                "category": "temporal",
                 "label": "Critical upcoming deadlines",
                 "detail": str(timeline_summary.get("critical")),
+                "detail_ar": None,
                 "severity": "critical",
+                "link_tab": "timeline",
+                "contributes_to_score": False,
             }
         )
     if comparison and comparison.get("findings"):
@@ -458,12 +548,22 @@ def build_risk_summary(
                 items.append(
                     {
                         "type": "comparison",
+                        "category": "comparison",
                         "label": f.get("category") or "Clause",
                         "detail": f.get("status") or "",
+                        "detail_ar": None,
                         "severity": f.get("risk_level") or "medium",
+                        "link_tab": "comparison",
+                        "contributes_to_score": False,
                     }
                 )
-    return {"items": items[:30], "count": len(items)}
+    return {
+        "score": engine_risk.get("score", 0),
+        "level": engine_risk.get("level", "low"),
+        "calculation_version": engine_risk.get("calculation_version"),
+        "items": items[:30],
+        "count": len(items),
+    }
 
 
 def build_review_dossier(contract_id, db: Session) -> dict:
@@ -477,6 +577,7 @@ def build_review_dossier(contract_id, db: Session) -> dict:
     milestones = list_payment_milestones_for_contract(contract_id, db)
     pay_sum = payments_summary(milestones, c)
     comparison = _comparison_for_contract(contract_id, db)
+    comparison_unavailable_reason = None if comparison else _comparison_unavailable_reason(c, db)
     penalties = _penalties_from_extractions(contract_id, db)
 
     ai_summary = build_ai_summary(c, obligations, timeline_summary, pay_sum, comparison)
@@ -493,6 +594,7 @@ def build_review_dossier(contract_id, db: Session) -> dict:
         "timeline": {"deadlines": deadlines, "summary": timeline_summary},
         "payments": {"milestones": milestones, "summary": pay_sum},
         "comparison": comparison,
+        "comparison_unavailable_reason": comparison_unavailable_reason,
         "risks": risks,
         "penalties": penalties,
     }

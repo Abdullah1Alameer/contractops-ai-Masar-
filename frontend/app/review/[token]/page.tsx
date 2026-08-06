@@ -9,6 +9,7 @@ import Logo from "@/components/Logo";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
+import RiskScoreRing from "@/components/ui/RiskScoreRing";
 import DualDate from "@/components/DualDate";
 import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import { useToast } from "@/components/feedback/ToastProvider";
@@ -25,6 +26,39 @@ import type { ReviewPortalPayload } from "@/lib/types";
 import { cn, formatDate, formatSAR } from "@/lib/utils";
 
 type Tab = "summary" | "risks" | "obligations" | "timeline" | "payments" | "comparison";
+
+function severityTone(severity: string): "danger" | "orange" | "warning" | "neutral" {
+  if (severity === "critical") return "danger";
+  if (severity === "high") return "orange";
+  if (severity === "medium" || severity === "warning") return "warning";
+  return "neutral";
+}
+
+// Every field rendered here comes straight from the contract text (a quote,
+// an AI-picked category, an Arabic explanation next to an English one) —
+// direction must be inferred per element, not inherited from the page's
+// overall `lang`, or a Latin amount inside an Arabic sentence (or vice
+// versa) renders reversed. `dir="auto"` lets the browser's bidi algorithm
+// decide per element from its own first strong character.
+function Bidi({ children, className }: { children: React.ReactNode; className?: string }) {
+  if (children === null || children === undefined || children === "") return null;
+  return (
+    <span dir="auto" className={className}>
+      {children}
+    </span>
+  );
+}
+
+function SourceRef({ clauseRef, page, t }: { clauseRef?: string | null; page?: number | null; t: (k: TKey) => string }) {
+  if (!clauseRef && !page) return null;
+  return (
+    <p className="mt-1 text-xs text-gray-400">
+      {t("review.portal.source")}: {clauseRef ? `${t("detail.clause")} ${clauseRef}` : null}
+      {clauseRef && page ? " · " : null}
+      {page ? `${t("detail.viewer.page")} ${page}` : null}
+    </p>
+  );
+}
 
 export default function ReviewPortalPage() {
   const { t, lang } = useI18n();
@@ -139,7 +173,8 @@ export default function ReviewPortalPage() {
     return (
       <Card>
         <CardBody className="text-center">
-          <p className="text-danger-600">{error}</p>
+          <p className="font-semibold text-danger-600">{t("review.portal.loadFailed")}</p>
+          <p className="mt-1 text-xs text-gray-500">{error}</p>
           <Button variant="secondary" className="mt-3" onClick={load}>
             {t("common.retry")}
           </Button>
@@ -181,10 +216,21 @@ export default function ReviewPortalPage() {
             </div>
           )}
 
+          {/* This dossier is contract-wide, not version-snapshotted (obligations/
+              deadlines/payments/risk findings have no per-version history in the
+              schema — a newer version overwrites them in place). When the review
+              is stale, say so plainly rather than silently showing newer-version
+              data as if it were what was originally sent. */}
+          {data.is_stale && (
+            <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              {t("review.portal.staleDossierNotice")}
+            </div>
+          )}
+
           <Card>
             <CardBody>
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">{t("review.portal.aiSummary")}</h2>
-              <pre className="whitespace-pre-wrap font-sans text-sm text-gray-800">{data.ai_summary}</pre>
+              <pre dir="auto" className="whitespace-pre-wrap font-sans text-sm text-gray-800">{data.ai_summary}</pre>
             </CardBody>
           </Card>
 
@@ -226,60 +272,163 @@ export default function ReviewPortalPage() {
             </dl>
           )}
           {tab === "risks" && (
-            <ul className="space-y-2">
-              {data.risks.items.length === 0 && <p className="text-sm text-gray-500">{t("common.empty")}</p>}
-              {data.risks.items.map((r, i) => (
-                <li key={i} className="rounded-lg border p-3 text-sm">
-                  <Badge tone={r.severity === "critical" ? "danger" : r.severity === "high" ? "orange" : "warning"}>
-                    {r.severity}
-                  </Badge>
-                  <p className="mt-1 font-medium">{r.label}</p>
-                  <p className="text-gray-600">{r.detail}</p>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-4 rounded-lg border p-3">
+                <RiskScoreRing score={data.risks.score} label={t("detail.tab.risk")} />
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {t("review.portal.riskLevel")}: {t(`review.portal.riskLevelValue.${data.risks.level}` as TKey)}
+                  </p>
+                  <p className="text-xs text-gray-500">{t("detail.riskWhy")}</p>
+                </div>
+              </div>
+              {data.risks.items.length === 0 ? (
+                <p className="text-sm text-gray-500">{t("review.portal.emptyRisks")}</p>
+              ) : (
+                <ul className="space-y-2">
+                  {data.risks.items.map((r, i) => (
+                    <li key={i} className="rounded-lg border p-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone={severityTone(r.severity)}>{r.severity}</Badge>
+                        {!r.contributes_to_score && (
+                          <Badge tone="subtle">{t("review.portal.additionalContext")}</Badge>
+                        )}
+                      </div>
+                      <Bidi className="mt-1 block font-medium">{r.label}</Bidi>
+                      <Bidi className="block text-gray-600">
+                        {lang === "ar" ? r.detail_ar || r.detail : r.detail || r.detail_ar}
+                      </Bidi>
+                      {r.type === "penalty" && (r.rate || r.cap || r.quote) && (
+                        <div className="mt-1 space-y-1 text-xs text-gray-500">
+                          {(r.rate || r.cap) && (
+                            <p>
+                              {r.rate && <span>{t("obligation.penalty")}: {r.rate}</span>}
+                              {r.rate && r.cap && " · "}
+                              {r.cap && <span>{t("review.portal.penaltyCap")}: {r.cap}</span>}
+                            </p>
+                          )}
+                          {r.quote && <Bidi className="block italic">&ldquo;{r.quote}&rdquo;</Bidi>}
+                        </div>
+                      )}
+                      <SourceRef clauseRef={r.clause_ref} page={r.page} t={t} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
           {tab === "obligations" && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-gray-500">
-                    <th className="py-2 text-start">{t("obligation.desc")}</th>
-                    <th className="py-2 text-start">{t("obligation.party")}</th>
-                    <th className="py-2 text-start">{t("obligation.due")}</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <div className="space-y-2">
+              {data.obligations.length === 0 ? (
+                <p className="text-sm text-gray-500">{t("review.portal.emptyObligations")}</p>
+              ) : (
+                <ul className="space-y-2">
                   {data.obligations.map((o) => (
-                    <tr key={o.id} className="border-t">
-                      <td className="py-2">{o.description}</td>
-                      <td className="py-2">{o.responsible_party ?? "—"}</td>
-                      <td className="py-2">{o.due_date ? <DualDate date={o.due_date} /> : "—"}</td>
-                    </tr>
+                    <li key={o.id} className="rounded-lg border p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Bidi className="font-medium">{o.title || o.description}</Bidi>
+                        <Badge tone={o.status === "overdue" ? "danger" : o.status === "done" ? "success" : "neutral"}>
+                          {t(`obligation.status.${o.status}` as TKey)}
+                        </Badge>
+                      </div>
+                      {o.title && o.description && <Bidi className="mt-1 block text-gray-600">{o.description}</Bidi>}
+                      <dl className="mt-2 grid gap-1 text-xs text-gray-500 sm:grid-cols-2">
+                        <div>
+                          <dt className="inline font-semibold">{t("obligation.party")}: </dt>
+                          <dd className="inline">{o.responsible_party ?? "—"}</dd>
+                          {o.beneficiary && (
+                            <dd className="inline"> → {o.beneficiary}</dd>
+                          )}
+                        </div>
+                        <div>
+                          <dt className="inline font-semibold">{t("obligation.due")}: </dt>
+                          <dd className="inline">{o.due_date ? <DualDate date={o.due_date} /> : t("review.portal.noDateYet")}</dd>
+                        </div>
+                        {o.trigger_event && (
+                          <div className="sm:col-span-2">
+                            <dt className="inline font-semibold">{t("review.portal.trigger")}: </dt>
+                            <dd className="inline">{o.trigger_type ? `${o.trigger_type} — ` : ""}{o.trigger_event}</dd>
+                          </div>
+                        )}
+                        {o.penalty_text && (
+                          <div className="sm:col-span-2">
+                            <dt className="inline font-semibold">{t("obligation.penalty")}: </dt>
+                            <Bidi className="inline">{o.penalty_text}</Bidi>
+                          </div>
+                        )}
+                      </dl>
+                      <SourceRef clauseRef={o.clause_ref} page={o.page} t={t} />
+                    </li>
                   ))}
-                </tbody>
-              </table>
+                </ul>
+              )}
             </div>
           )}
           {tab === "timeline" && (
-            <ul className="space-y-2 text-sm">
-              {data.timeline.deadlines.map((d) => (
-                <li key={d.id} className="flex justify-between gap-2 border-b py-2">
-                  <span>{d.title ?? d.type}</span>
-                  <span className="text-gray-600">{d.deadline_date ?? "—"}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-2">
+              {data.timeline.deadlines.length === 0 ? (
+                <p className="text-sm text-gray-500">{t("review.portal.emptyTimeline")}</p>
+              ) : (
+                <ul className="space-y-2">
+                  {data.timeline.deadlines.map((d) => (
+                    <li key={d.id} className="rounded-lg border p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Bidi className="font-medium">{d.title ?? d.type}</Bidi>
+                        <Badge tone={severityTone(d.status === "missed" ? "high" : d.severity)}>
+                          {t(`deadline.status.${d.status}` as TKey)}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-gray-700">
+                        {d.deadline_date ? (
+                          <DualDate date={d.deadline_date} />
+                        ) : (
+                          <span className="text-gray-500">{t("review.portal.noDateYet")}</span>
+                        )}
+                        {d.notice_period_days ? ` · ${t("review.portal.noticeDays")}: ${d.notice_period_days}` : ""}
+                      </p>
+                      {d.source_trigger_date && (
+                        <p className="text-xs text-gray-500">
+                          {t("detail.noticeReference")}: <DualDate date={d.source_trigger_date} />
+                        </p>
+                      )}
+                      {!d.deadline_date && (d.calculation_explanation || d.calculation_explanation_ar) && (
+                        <Bidi className="mt-1 block text-xs text-amber-700">
+                          {lang === "ar"
+                            ? d.calculation_explanation_ar || d.calculation_explanation
+                            : d.calculation_explanation || d.calculation_explanation_ar}
+                        </Bidi>
+                      )}
+                      <SourceRef clauseRef={d.clause_ref} page={d.page} t={t} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
           {tab === "payments" && (
-            <ul className="space-y-2 text-sm">
-              {data.payments.milestones.map((m) => (
-                <li key={m.id} className="flex justify-between gap-2 border-b py-2">
-                  <span>{m.label}</span>
-                  <span>{formatSAR(m.amount_sar, lang)}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-2">
+              {data.payments.milestones.length === 0 ? (
+                <p className="text-sm text-gray-500">{t("review.portal.emptyPayments")}</p>
+              ) : (
+                <ul className="space-y-2">
+                  {data.payments.milestones.map((m) => (
+                    <li key={m.id} className="rounded-lg border p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Bidi className="font-medium">{m.label || m.type}</Bidi>
+                        <Badge tone={m.status === "overdue" ? "danger" : m.status === "paid" ? "success" : "neutral"}>
+                          {t(`payment.status.${m.status}` as TKey)}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-gray-700">{formatSAR(m.amount_sar, lang)}</p>
+                      <p className="text-xs text-gray-500">
+                        {t("obligation.due")}: {m.due_date ? <DualDate date={m.due_date} /> : t("review.portal.noDateYet")}
+                      </p>
+                      <SourceRef clauseRef={m.clause_ref} page={m.page} t={t} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
           {tab === "comparison" &&
             (data.comparison ? (
@@ -288,7 +437,11 @@ export default function ReviewPortalPage() {
                 <FlowdownFindings findings={data.comparison.findings} onViewMain={() => {}} onViewSub={() => {}} />
               </div>
             ) : (
-              <p className="text-sm text-gray-500">{t("review.portal.noComparison")}</p>
+              <p className="text-sm text-gray-500">
+                {data.comparison_unavailable_reason === "not_yet_compared"
+                  ? t("review.portal.comparisonNotYetCompared")
+                  : t("review.portal.comparisonNotLinked")}
+              </p>
             ))}
         </CardBody>
       </Card>

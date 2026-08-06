@@ -462,6 +462,49 @@ export interface SendReviewResponse {
   delivery?: DeliveryRow | null;
 }
 
+export interface ReviewPortalObligationRow {
+  id: string;
+  title: string | null;
+  description: string | null;
+  responsible_party: string | null;
+  beneficiary: string | null;
+  trigger_type: string | null;
+  trigger_event: string | null;
+  completion_criteria: string | null;
+  contract_required_evidence: string[];
+  suggested_evidence: string[];
+  due_date: string | null;
+  penalty_text: string | null;
+  status: string;
+  clause_ref: string | null;
+  page: number | null;
+}
+
+export interface ReviewPortalRiskItem {
+  type: "finding" | "penalty" | "deadline" | "comparison" | string;
+  category: string | null;
+  label: string;
+  detail: string | null;
+  detail_ar: string | null;
+  severity: string;
+  link_tab: string | null;
+  contributes_to_score: boolean;
+  // penalty-only fields
+  cap?: string | null;
+  rate?: string | null;
+  quote?: string | null;
+  clause_ref?: string | null;
+  page?: number | null;
+}
+
+export interface ReviewPortalRisks {
+  score: number;
+  level: string;
+  calculation_version: string | null;
+  items: ReviewPortalRiskItem[];
+  count: number;
+}
+
 export interface ReviewPortalPayload {
   contract: {
     id: string;
@@ -476,21 +519,13 @@ export interface ReviewPortalPayload {
     contract_category: string | null;
   };
   ai_summary: string;
-  notices: unknown[];
-  obligations: {
-    id: string;
-    description: string | null;
-    responsible_party: string | null;
-    due_date: string | null;
-    penalty_text: string | null;
-    status: string;
-    clause_ref: string | null;
-    page: number | null;
-  }[];
+  notices: NoticePeriodItem[];
+  obligations: ReviewPortalObligationRow[];
   timeline: { deadlines: DeadlineRow[]; summary: DeadlineSummary };
   payments: { milestones: PaymentMilestoneRow[]; summary: PaymentSummary };
   comparison: FlowdownResponse | null;
-  risks: { items: { type: string; label: string; detail: string; severity: string }[]; count: number };
+  comparison_unavailable_reason: "not_linked" | "not_yet_compared" | null;
+  risks: ReviewPortalRisks;
   recipient_name: string;
   status: ReviewStatus;
   expires_at: string | null;
