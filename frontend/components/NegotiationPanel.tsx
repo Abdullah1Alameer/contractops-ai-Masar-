@@ -8,18 +8,24 @@ import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import { SkeletonCard } from "@/components/ui/Skeleton";
+import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import { useToast } from "@/components/feedback/ToastProvider";
 import {
   abandonNegotiation,
   analyzeNegotiation,
   apiErrorCode,
+  DEMO_ROLE_EVENT,
+  DEMO_ROLE_STORAGE,
   fetchNegotiations,
   patchNegotiation,
+  recordNegotiationAgreement,
   sendNegotiationUpdated,
 } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type { NegotiationCandidate, NegotiationRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const AGREEMENT_OVERRIDE_ROLES = new Set(["legal", "executive"]);
 
 function riskTone(r: string | null): "success" | "warning" | "orange" | "danger" | "neutral" {
   if (r === "critical") return "danger";
@@ -60,18 +66,30 @@ function ImpactCard({ title, body }: { title: string; body: string | null }) {
 function NegotiationResult({
   row,
   lang,
+  contractStage,
+  role,
   onUpdated,
   onRestart,
   onLifecycleChanged,
+  onAgreementResolved,
 }: {
   row: NegotiationRow;
   lang: "ar" | "en";
+  contractStage?: string | null;
+  role: string;
   onUpdated: () => void;
   onRestart?: () => void;
-  onLifecycleChanged?: () => void;
+  onLifecycleChanged?: () => void | Promise<void>;
+  // Called (not rendered locally) when the override resolves the contract to
+  // internal_review. `onUpdated()` triggers the parent's loading-skeleton
+  // refetch, which unmounts/remounts this component — any local state set
+  // after that call would be silently dropped, so the "resolved" banner is
+  // owned by the parent (NegotiationPanel), which never unmounts.
+  onAgreementResolved?: () => void;
 }) {
   const { t } = useI18n();
   const toast = useToast();
+  const { confirm } = useConfirm();
   const [draft, setDraft] = useState(row);
   const [finalEn, setFinalEn] = useState(row.lawyer_final_clause ?? "");
   const [finalAr, setFinalAr] = useState(row.lawyer_final_clause_ar ?? "");
@@ -140,6 +158,47 @@ function NegotiationResult({
     } finally {
       setBusy(false);
     }
+  };
+
+  // Authorized internal override (docs/contract-lifecycle-policy.md §5): the
+  // canonical path is the counterparty clicking Approve on the public
+  // follow-up link. This is a distinct, audited trigger for the exact same
+  // LifecycleService transition — for when the counterparty confirmed
+  // agreement outside the portal (phone/email/in person). It never bypasses
+  // LifecycleService or invents new stage semantics on the frontend; it just
+  // calls the backend override endpoint and reflects its response.
+  const canRecordAgreement =
+    contractStage === "negotiation" &&
+    row.actionable !== false &&
+    !row.is_stale &&
+    row.workflow_status !== "accepted" &&
+    row.workflow_status !== "closed" &&
+    AGREEMENT_OVERRIDE_ROLES.has(role);
+
+  const recordAgreement = () => {
+    const reason = window.prompt(t("negotiation.recordAgreementReasonPrompt"))?.trim();
+    if (!reason) return;
+    confirm({
+      title: t("negotiation.recordAgreement"),
+      body: t("negotiation.recordAgreementConfirmBody"),
+      confirmLabel: t("negotiation.recordAgreement"),
+      onConfirm: async () => {
+        setBusy(true);
+        try {
+          const result = await recordNegotiationAgreement(row.id, reason);
+          toast.success(t("negotiation.recordAgreementSuccess"));
+          if (result.contract_stage === "internal_review") {
+            onAgreementResolved?.();
+          }
+          onUpdated();
+          await onLifecycleChanged?.();
+        } catch (error) {
+          toast.error(apiErrorCode(error, t("common.error")));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   };
 
   const counter =
@@ -266,10 +325,11 @@ function NegotiationResult({
 
       {/* Per docs/contract-lifecycle-policy.md §5, negotiation resolves to
           internal_review only when the counterparty accepts the sent
-          counterproposal — there is no internal "mark agreement reached"
-          endpoint, and none should bypass that public decision. This is the
-          only remaining action while waiting: reach the counterparty again
-          with the same link, or abandon the negotiation. */}
+          counterproposal. An authorized legal/executive user can also
+          record that agreement was reached out-of-band via the
+          "Record Agreement Reached" override below — it fires the exact
+          same LifecycleService transition, just triggered internally
+          instead of by the counterparty's public click. */}
       {draft.workflow_status === "sent_to_client" && (
         <div className="rounded-card border border-info-200/80 bg-info-50/60 p-3">
           <p className="text-sm font-semibold text-info-900">{t("negotiation.waitingForClient")}</p>
@@ -282,6 +342,11 @@ function NegotiationResult({
                 onClick={() => copyText(draft.final_summary!.review_link as string)}
               >
                 {t("negotiation.copyClientLink")}
+              </Button>
+            )}
+            {canRecordAgreement && (
+              <Button variant="primary" size="sm" loading={busy} onClick={recordAgreement}>
+                {t("negotiation.recordAgreement")}
               </Button>
             )}
             {row.actionable !== false && !row.is_stale && (
@@ -301,6 +366,11 @@ function NegotiationResult({
           <Button variant="primary" size="sm" loading={busy} onClick={send}>
             {t("negotiation.send")}
           </Button>
+          {canRecordAgreement && (
+            <Button variant="primary" size="sm" loading={busy} onClick={recordAgreement}>
+              {t("negotiation.recordAgreement")}
+            </Button>
+          )}
           <Button variant="danger" size="sm" loading={busy} onClick={abandon}>
             {t("negotiation.abandon")}
           </Button>
@@ -312,18 +382,28 @@ function NegotiationResult({
 
 export default function NegotiationPanel({
   contractId,
+  contractStage,
   highlightId,
   onLifecycleChanged,
+  onGoToApproval,
 }: {
   contractId: string;
+  contractStage?: string | null;
   highlightId?: string | null;
-  onLifecycleChanged?: () => void;
+  onLifecycleChanged?: () => void | Promise<void>;
+  onGoToApproval?: () => void;
 }) {
   const { t, lang } = useI18n();
   const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [candidates, setCandidates] = useState<NegotiationCandidate[]>([]);
   const [analyzingKey, setAnalyzingKey] = useState<string | null>(null);
+  const [role, setRole] = useState("legal");
+  // Owned here, not in NegotiationResult: `onUpdated()` (passed to that
+  // child) triggers `load()` below, which unmounts/remounts every candidate
+  // card via the `loading` skeleton gate. This component instance does not
+  // unmount, so the "resolved" banner survives that refresh.
+  const [agreementResolved, setAgreementResolved] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -334,6 +414,14 @@ export default function NegotiationPanel({
   }, [contractId]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(DEMO_ROLE_STORAGE);
+    if (saved) setRole(saved);
+    const onRoleChange = () => setRole(localStorage.getItem(DEMO_ROLE_STORAGE) || "legal");
+    window.addEventListener(DEMO_ROLE_EVENT, onRoleChange);
+    return () => window.removeEventListener(DEMO_ROLE_EVENT, onRoleChange);
+  }, []);
 
   const analyze = async (c: NegotiationCandidate) => {
     const key = `${c.review_id}-${c.comment_id ?? "overall"}`;
@@ -353,6 +441,16 @@ export default function NegotiationPanel({
 
   return (
     <div className="space-y-4">
+      {agreementResolved && (
+        <div className="rounded-card border border-success-200/80 bg-success-50/60 p-3">
+          <p className="text-sm font-semibold text-success-700">{t("negotiation.recordAgreementResolved")}</p>
+          {onGoToApproval && (
+            <Button variant="secondary" size="sm" className="mt-2" onClick={onGoToApproval}>
+              {t("negotiation.goToApproval")}
+            </Button>
+          )}
+        </div>
+      )}
       {candidates.map((c) => {
         const key = `${c.review_id}-${c.comment_id ?? "overall"}`;
         const neg = c.negotiation;
@@ -395,8 +493,11 @@ export default function NegotiationPanel({
                 <NegotiationResult
                   row={neg}
                   lang={lang}
+                  contractStage={contractStage}
+                  role={role}
                   onUpdated={load}
                   onLifecycleChanged={onLifecycleChanged}
+                  onAgreementResolved={() => setAgreementResolved(true)}
                   onRestart={
                     neg.is_stale && c.review_id
                       ? () => analyze(c)

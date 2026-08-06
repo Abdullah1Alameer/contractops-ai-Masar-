@@ -332,6 +332,19 @@ export async function abandonNegotiation(id: string, reason: string) {
   );
 }
 
+// Authorized internal override (legal/executive only) recording that
+// agreement was reached outside the public portal — see
+// backend/app/services/negotiation.py::record_agreement_override. Goes
+// through the same LifecycleService transition as a real counterparty
+// approval; this call does not alter lifecycle semantics.
+export async function recordNegotiationAgreement(id: string, reason: string) {
+  return apiJson<import("./types").NegotiationRow>(
+    `/api/negotiations/${id}/record-agreement`,
+    "POST",
+    { reason }
+  );
+}
+
 export async function fetchApprovals(contractId: string) {
   return api<import("./types").ApprovalsResponse>(`/api/contracts/${contractId}/approvals`);
 }

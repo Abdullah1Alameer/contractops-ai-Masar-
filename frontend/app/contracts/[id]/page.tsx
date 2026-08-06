@@ -545,8 +545,10 @@ export default function ContractDetailPage() {
             <NegotiationOpportunitiesPanel contractId={id} />
             <NegotiationPanel
               contractId={id}
+              contractStage={detail.stage}
               highlightId={highlightNegotiation}
               onLifecycleChanged={load}
+              onGoToApproval={() => setTab("approvals")}
             />
           </TabPanel>
 
