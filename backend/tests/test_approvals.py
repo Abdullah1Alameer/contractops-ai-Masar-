@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.services.approval_routes import _validate_steps
 from app.services.approvals import (
     DEFAULT_ROLES,
     OVERRIDABLE_RULES,
@@ -19,7 +20,6 @@ from app.services.approvals import (
     _negotiation_view,
     _normalize_override,
     _reason_audit,
-    _resolve_sequence,
     allowed_actions_for_role,
     approval_summary,
     normalize_demo_role,
@@ -59,16 +59,40 @@ def test_allowed_actions_on_closed_workflow():
     assert allowed_actions_for_role(w, steps, "executive") == []
 
 
-def test_resolve_sequence_defaults_to_configured_roles():
-    assert _resolve_sequence(None) == DEFAULT_ROLES
-    assert _resolve_sequence({"legal": "Layla"}) == DEFAULT_ROLES
+def test_validate_steps_preserves_order_and_defaults():
+    # _resolve_sequence() (which always returned the hardcoded DEFAULT_ROLES
+    # regardless of input) was removed as part of configurable approval
+    # routes — _validate_steps() is its replacement, and actually honors
+    # whatever roles/order the caller supplies. See
+    # docs/configurable-approval-routes-report.md.
+    clean = _validate_steps([{"role": "legal"}, {"role": "sales"}, {"role": "executive"}])
+    assert [s["role"] for s in clean] == ["legal", "sales", "executive"]
+    assert all(s["required"] is True for s in clean)
 
 
-def test_resolve_sequence_rejects_unknown_role():
+def test_validate_steps_rejects_unknown_role():
     with pytest.raises(ApprovalError) as excinfo:
-        _resolve_sequence({"chief_pirate": "Nobody"})
-    assert excinfo.value.code == "invalid_approval_sequence"
+        _validate_steps([{"role": "chief_pirate"}])
+    assert excinfo.value.code == "invalid_approver"
     assert excinfo.value.status_code == 422
+
+
+def test_validate_steps_rejects_empty():
+    with pytest.raises(ApprovalError) as excinfo:
+        _validate_steps([])
+    assert excinfo.value.code == "approval_steps_required"
+
+
+def test_validate_steps_rejects_duplicate_role_without_distinct_name():
+    with pytest.raises(ApprovalError) as excinfo:
+        _validate_steps([{"role": "legal"}, {"role": "legal"}])
+    assert excinfo.value.code == "duplicate_approver"
+
+    # Distinct named approvers under the same role are allowed.
+    clean = _validate_steps(
+        [{"role": "legal", "approver_name": "Fatima"}, {"role": "legal", "approver_name": "Yusuf"}]
+    )
+    assert len(clean) == 2
 
 
 def test_legacy_force_flag_needs_structured_override():

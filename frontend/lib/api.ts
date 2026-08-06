@@ -370,7 +370,6 @@ export async function fetchApprovals(contractId: string) {
 export async function startApproval(
   contractId: string,
   body: {
-    approver_names?: Record<string, string>;
     override?: { reason: string; negotiation_ids: string[]; rules?: string[] };
   } = {}
 ) {
@@ -381,6 +380,57 @@ export async function startApproval(
   );
   invalidateContract(contractId);
   return res;
+}
+
+// Configurable approval routes — see docs/configurable-approval-routes-report.md.
+export async function fetchContractApprovalRoute(contractId: string) {
+  return api<{ route: import("./types").ContractApprovalRoute | null }>(
+    `/api/contracts/${contractId}/approval-route`
+  );
+}
+
+export async function configureApprovalRoute(
+  contractId: string,
+  body: {
+    name?: string | null;
+    steps: import("./types").ApprovalRouteStepInput[];
+    source_route_id?: string | null;
+    save_as_route?: boolean;
+    save_as_route_name?: string | null;
+  }
+) {
+  const res = await apiJson<import("./types").ContractApprovalRoute>(
+    `/api/contracts/${contractId}/approval-route`,
+    "PUT",
+    body
+  );
+  invalidateContract(contractId);
+  return res;
+}
+
+export async function fetchSavedRoutes(includeInactive = false) {
+  return api<{ routes: import("./types").SavedApprovalRoute[]; available_roles: string[] }>(
+    `/api/approval-routes${includeInactive ? "?include_inactive=true" : ""}`
+  );
+}
+
+export async function fetchSavedRoute(routeId: string) {
+  return api<import("./types").SavedApprovalRoute>(`/api/approval-routes/${routeId}`);
+}
+
+export async function createSavedRoute(body: { name: string; steps: import("./types").ApprovalRouteStepInput[] }) {
+  return apiJson<import("./types").SavedApprovalRoute>("/api/approval-routes", "POST", body);
+}
+
+export async function updateSavedRoute(
+  routeId: string,
+  body: { name?: string; steps?: import("./types").ApprovalRouteStepInput[] }
+) {
+  return apiJson<import("./types").SavedApprovalRoute>(`/api/approval-routes/${routeId}`, "PUT", body);
+}
+
+export async function archiveSavedRoute(routeId: string) {
+  return apiJson<import("./types").SavedApprovalRoute>(`/api/approval-routes/${routeId}/archive`, "POST", {});
 }
 
 export async function patchApprovalStep(stepId: string, body: { status: string; comment?: string }) {

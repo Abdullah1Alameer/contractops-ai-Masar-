@@ -404,6 +404,10 @@ class ApprovalWorkflow(Base):
     started_by = Column(Text, nullable=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    # Snapshot of the configured route this workflow was started from — see
+    # ContractApprovalRoute below / docs/configurable-approval-routes-report.md.
+    route_name = Column(Text, nullable=True)
+    contract_route_id = Column(UUID(as_uuid=True), ForeignKey("contract_approval_routes.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -418,11 +422,70 @@ class ApprovalStep(Base):
     role = Column(Text, nullable=False)
     approver_name = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="locked")
+    required = Column(Boolean, nullable=False, default=True)
     comment = Column(Text, nullable=True)
     acted_at = Column(DateTime(timezone=True), nullable=True)
     acted_by = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ApprovalRoute(Base):
+    """A reusable, saved approval-route template — never bound to one
+    contract. Selecting it for a contract copies its steps into a
+    ContractApprovalRoute; later edits here never mutate that copy."""
+
+    __tablename__ = "approval_routes"
+    id = _uuid_pk()
+    name = Column(Text, nullable=False)
+    scope = Column(Text, nullable=False, default="default")
+    active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ApprovalRouteStep(Base):
+    __tablename__ = "approval_route_steps"
+    __table_args__ = (UniqueConstraint("route_id", "step_order"),)
+    id = _uuid_pk()
+    route_id = Column(UUID(as_uuid=True), ForeignKey("approval_routes.id", ondelete="CASCADE"), nullable=False)
+    step_order = Column(Integer, nullable=False)
+    role = Column(Text, nullable=False)
+    approver_name = Column(Text, nullable=True)
+    required = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ContractApprovalRoute(Base):
+    """The configured route for one contract, before (and then snapshotted
+    into) an ApprovalWorkflow. 'draft' while editable; 'started' once a
+    workflow has been created from it (locked); 'cancelled' once its
+    workflow is cancelled (a fresh configure() call then makes a new draft
+    rather than reusing/mutating this row)."""
+
+    __tablename__ = "contract_approval_routes"
+    id = _uuid_pk()
+    contract_id = Column(UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False)
+    version_id = Column(UUID(as_uuid=True), ForeignKey("contract_versions.id", ondelete="SET NULL"), nullable=True)
+    name = Column(Text, nullable=True)
+    source_route_id = Column(UUID(as_uuid=True), ForeignKey("approval_routes.id", ondelete="SET NULL"), nullable=True)
+    status = Column(Text, nullable=False, default="draft")
+    created_by = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ContractApprovalRouteStep(Base):
+    __tablename__ = "contract_approval_route_steps"
+    __table_args__ = (UniqueConstraint("contract_route_id", "step_order"),)
+    id = _uuid_pk()
+    contract_route_id = Column(UUID(as_uuid=True), ForeignKey("contract_approval_routes.id", ondelete="CASCADE"), nullable=False)
+    step_order = Column(Integer, nullable=False)
+    role = Column(Text, nullable=False)
+    approver_name = Column(Text, nullable=True)
+    required = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class ActivityEvent(Base):

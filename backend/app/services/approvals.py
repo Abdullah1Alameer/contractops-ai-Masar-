@@ -9,11 +9,13 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..deps import ALLOWED_DEMO_ROLES
 from ..models import (
     ActivityEvent,
     ApprovalStep,
     ApprovalWorkflow,
     Contract,
+    ContractApprovalRoute,
     ContractVersion,
     ReviewRequest,
     SignatureRequest,
@@ -26,9 +28,17 @@ from .lifecycle import (
     normalize_stage,
 )
 
+# Historical default sequence — no longer used to build a workflow (see
+# approval_routes.py), kept only as the example route seeded/used by
+# existing "four-role route" tests and the demo's optional starter route.
 DEFAULT_ROLES = ["business_owner", "legal", "finance", "executive"]
-ALLOWED_DEMO_ROLES = frozenset(DEFAULT_ROLES)
 OVERRIDE_ROLES = frozenset({"legal", "executive"})
+# Who may configure/manage approval routes. The spec calls for "legal,
+# executive, or the existing approval-admin role" — no approval-admin role
+# exists anywhere in this demo's role model, so legal/executive (already
+# this app's elevated-authorization roles, e.g. the negotiation override)
+# serve that function. See docs/configurable-approval-routes-report.md.
+ROUTE_ADMIN_ROLES = frozenset({"legal", "executive"})
 ACTIVE_WORKFLOW = frozenset({"in_progress"})
 TERMINAL_WORKFLOW = frozenset({"approved", "rejected", "changes_requested", "cancelled"})
 RESOLVED_NEGOTIATION = frozenset({"accepted", "closed"})
@@ -303,19 +313,6 @@ def _entry_evidence(contract: Contract, version: ContractVersion, db: Session) -
     return None
 
 
-def _resolve_sequence(approver_names: dict | None) -> list[str]:
-    names = approver_names or {}
-    unknown = [role for role in names if role not in ALLOWED_DEMO_ROLES]
-    if unknown:
-        _raise(422, "invalid_approval_sequence", unknown_roles=sorted(unknown))
-    sequence = list(DEFAULT_ROLES)
-    if not sequence:
-        _raise(422, "approvers_required")
-    if len(set(sequence)) != len(sequence):
-        _raise(422, "invalid_approval_sequence")
-    return sequence
-
-
 def _normalize_override(override: dict | None, *, force: bool) -> dict | None:
     """Structured override payload; unrestricted force is no longer accepted."""
     if override is None:
@@ -442,6 +439,7 @@ def serialize_step(s: ApprovalStep) -> dict:
         "role": s.role,
         "approver_name": s.approver_name,
         "status": s.status,
+        "required": s.required,
         "comment": s.comment,
         "acted_at": _iso(s.acted_at),
         "acted_by": s.acted_by,
@@ -489,6 +487,14 @@ def serialize_workflow(w: ApprovalWorkflow, db: Session, demo_role: str) -> dict
         "is_stale": stale,
         "override_used": _override_used(w, db),
         "version_id": str(w.version_id) if getattr(w, "version_id", None) else None,
+        "route_name": w.route_name,
+        "contract_route_id": str(w.contract_route_id) if getattr(w, "contract_route_id", None) else None,
+        # This backend only ever gates the next step on the previous one
+        # being resolved — there is no parallel/mixed execution path
+        # anywhere in the workflow engine. Reported explicitly so the
+        # frontend never has to guess or imply a capability that doesn't
+        # exist. See docs/configurable-approval-routes-report.md.
+        "workflow_type": "sequential",
     }
 
 
@@ -496,16 +502,21 @@ def start_workflow(
     contract_id,
     db: Session,
     *,
-    approver_names: dict | None = None,
     actor: str = "demo",
     role: str | None = None,
     override: dict | None = None,
     force: bool = False,
 ) -> dict:
+    """Snapshots the contract's configured, draft approval route into a real
+    workflow + steps. The route itself (roles/order/required flags) must
+    already have been configured via approval_routes.configure_contract_route
+    — this function no longer accepts an inline approver mapping or falls
+    back to any hardcoded sequence. See
+    docs/configurable-approval-routes-report.md."""
     acting_role = normalize_demo_role(role or actor)
-    sequence = _resolve_sequence(approver_names)
     override_request = _normalize_override(override, force=force)
-    names = approver_names or {}
+
+    from .approval_routes import get_draft_route_with_steps, mark_route_started
 
     try:
         contract = _lock_contract(contract_id, db)
@@ -524,6 +535,13 @@ def start_workflow(
         if _active_signature_request(contract_id, db) is not None:
             _raise(409, "signature_request_active")
 
+        route_and_steps = get_draft_route_with_steps(contract_id, db)
+        if route_and_steps is None:
+            _raise(422, "approval_route_required")
+        route, route_steps = route_and_steps
+        if not route_steps:
+            _raise(422, "approval_steps_required")
+
         unresolved = _unresolved_for_version(contract_id, current.id, db)
         override_granted = (
             _authorize_override(override_request, acting_role, unresolved) if unresolved else None
@@ -536,22 +554,26 @@ def start_workflow(
             status="in_progress",
             current_step_order=1,
             started_by=actor,
+            route_name=route.name,
+            contract_route_id=route.id,
         )
         db.add(workflow)
         db.flush()
 
-        for order, step_role in enumerate(sequence, start=1):
+        for route_step in route_steps:
             db.add(
                 ApprovalStep(
                     id=uuid.uuid4(),
                     workflow_id=workflow.id,
                     contract_id=contract_id,
-                    step_order=order,
-                    role=step_role,
-                    approver_name=names.get(step_role),
-                    status="pending" if order == 1 else "locked",
+                    step_order=route_step.step_order,
+                    role=route_step.role,
+                    approver_name=route_step.approver_name,
+                    required=route_step.required,
+                    status="pending" if route_step.step_order == 1 else "locked",
                 )
             )
+        mark_route_started(route, db)
 
         base_metadata = _safe_metadata(
             workflow,
@@ -982,6 +1004,15 @@ def cancel_workflow(
         workflow.status = "cancelled"
         workflow.completed_at = now
         workflow.updated_at = now
+
+        if workflow.contract_route_id is not None:
+            from .approval_routes import mark_route_cancelled
+
+            # The route itself (and its steps) is left exactly as it was —
+            # only its status flips, so this workflow's history keeps
+            # pointing at the real route it ran. A later configure() call
+            # creates a brand-new draft rather than reusing this one.
+            mark_route_cancelled(workflow.contract_route_id, db)
 
         metadata = _safe_metadata(
             workflow,

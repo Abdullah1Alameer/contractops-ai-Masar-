@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { DEMO_ROLE_EVENT, DEMO_ROLE_STORAGE } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
 
-const ROLES = ["business_owner", "legal", "finance", "executive"] as const;
+// "sales" and "manager" were added for configurable approval routes — a
+// route step can require either. See docs/configurable-approval-routes-report.md.
+const ROLES = ["business_owner", "legal", "finance", "executive", "sales", "manager"] as const;
 
 export default function DemoRoleSwitcher() {
   const { t } = useI18n();

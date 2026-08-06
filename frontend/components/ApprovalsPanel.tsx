@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 
+import ApprovalRouteBuilder from "@/components/ApprovalRouteBuilder";
 import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -16,22 +17,19 @@ import {
   DEMO_ROLE_EVENT,
   fetchActivity,
   fetchApprovals,
+  fetchContractApprovalRoute,
   patchApprovalStep,
   startApproval,
 } from "@/lib/api";
 import { useToast } from "@/components/feedback/ToastProvider";
 import { useI18n, type TKey } from "@/lib/i18n";
 import { mapActivityEvents } from "@/lib/activity";
-import type { ActivityEventRow, ApprovalWorkflowView } from "@/lib/types";
+import type { ActivityEventRow, ApprovalWorkflowView, ContractApprovalRoute } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const ROLES = ["business_owner", "legal", "finance", "executive"] as const;
-const CHAIN: { role: (typeof ROLES)[number]; labelKey: TKey }[] = [
-  { role: "business_owner", labelKey: "approval.step.owner" },
-  { role: "legal", labelKey: "approval.step.legal" },
-  { role: "finance", labelKey: "approval.step.finance" },
-  { role: "executive", labelKey: "approval.step.executive" },
-];
+function roleLabel(t: (k: TKey) => string, role: string): string {
+  return t(`role.${role}` as TKey);
+}
 
 export default function ApprovalsPanel({
   contractId,
@@ -46,28 +44,32 @@ export default function ApprovalsPanel({
   onLifecycleChange?: () => void;
   onGoToNegotiation?: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { confirm } = useConfirm();
   const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [workflow, setWorkflow] = useState<ApprovalWorkflowView | null>(null);
+  const [contractRoute, setContractRoute] = useState<ContractApprovalRoute | null>(null);
   const [unresolved, setUnresolved] = useState<{ id: string }[]>([]);
   const [events, setEvents] = useState<ActivityEventRow[]>([]);
   const [comment, setComment] = useState("");
   const [cancelReason, setCancelReason] = useState("");
+  const [editingRoute, setEditingRoute] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.all([fetchApprovals(contractId), fetchActivity(contractId)])
-      .then(([a, ev]) => {
+    Promise.all([fetchApprovals(contractId), fetchActivity(contractId), fetchContractApprovalRoute(contractId)])
+      .then(([a, ev, r]) => {
         setWorkflow(a.workflow);
         setUnresolved(a.unresolved_negotiations ?? []);
         setEvents(ev.events ?? []);
+        setContractRoute(r.route);
       })
       .catch(() => {
         setWorkflow(null);
         setUnresolved([]);
+        setContractRoute(null);
       })
       .finally(() => setLoading(false));
   }, [contractId]);
@@ -84,19 +86,26 @@ export default function ApprovalsPanel({
   // Canonical precondition only (docs/contract-lifecycle-policy.md §6 "Start
   // conditions"): stage must be internal_review. No fallback for a missing
   // stage — an unknown stage must never be treated as "start is allowed".
-  const canStart = !active && !blocked && contractStage === "internal_review";
+  const canConfigure = !active && !blocked && contractStage === "internal_review";
   const actionable = workflow?.actionable ?? false;
+  const hasDraftRoute = contractRoute?.status === "draft" && (contractRoute.steps?.length ?? 0) > 0;
 
-  const start = () => {
+  const onRouteConfigured = () => {
+    setEditingRoute(false);
+    load();
+  };
+
+  const startWorkflow = () => {
     confirm({
       title: t("approval.startTitle"),
       body: t("approval.startBody"),
-      confirmLabel: t("approval.start"),
+      confirmLabel: t("approval.routeBuilder.startWorkflow"),
       onConfirm: () => {
         setBusy(true);
         startApproval(contractId)
           .then((w) => {
             setWorkflow(w);
+            load();
             onLifecycleChange?.();
           })
           .catch((error) => toast.error(apiErrorCode(error, t("common.error"))))
@@ -137,10 +146,8 @@ export default function ApprovalsPanel({
     }
   };
 
-  const requiredRoleLabelKey = CHAIN.find((entry) => entry.role === workflow?.current_required_role)?.labelKey;
-
   if (loading) return <SkeletonCard rows={4} />;
-  if (!workflow && !canStart && !blocked) {
+  if (!workflow && !canConfigure && !blocked) {
     return (
       <EmptyState
         title={t("approval.empty")}
@@ -157,12 +164,6 @@ export default function ApprovalsPanel({
 
   return (
     <div className={cn("space-y-6", highlightId && workflow?.id === highlightId && "rounded-card ring-2 ring-brand-500/40 p-2")}>
-      {canStart && (!workflow || workflow.status !== "in_progress") && (
-        <Button variant="primary" loading={busy} onClick={start}>
-          {t("approval.start")}
-        </Button>
-      )}
-
       {!active && blocked && (
         <div className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-warning-900">
           <p>
@@ -176,6 +177,45 @@ export default function ApprovalsPanel({
         </div>
       )}
 
+      {/* No workflow yet: configure (or resume configuring) the route, then
+          start it explicitly — never a generic button that silently creates
+          a hardcoded sequence. See docs/configurable-approval-routes-report.md. */}
+      {canConfigure && (!hasDraftRoute || editingRoute) && (
+        <ApprovalRouteBuilder
+          contractId={contractId}
+          initialDraft={contractRoute?.status === "draft" ? contractRoute : null}
+          onConfigured={onRouteConfigured}
+        />
+      )}
+
+      {canConfigure && hasDraftRoute && !editingRoute && contractRoute && (
+        <Card>
+          <CardBody className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-bold">{contractRoute.name || t("approval.configureRoute")}</h3>
+              <Badge tone="info">{t("approval.workflowType.sequential")}</Badge>
+            </div>
+            <ol className="space-y-1 text-sm text-neutral-800">
+              {contractRoute.steps.map((s) => (
+                <li key={s.id}>
+                  {s.step_order}. {roleLabel(t, s.role)}
+                  {s.approver_name && ` — ${s.approver_name}`}
+                  {!s.required && ` (${t("approval.routeBuilder.optionalTag")})`}
+                </li>
+              ))}
+            </ol>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="primary" loading={busy} onClick={startWorkflow}>
+                {t("approval.routeBuilder.startWorkflow")}
+              </Button>
+              <Button variant="secondary" onClick={() => setEditingRoute(true)}>
+                {t("approval.routeBuilder.customize")}
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       {workflow?.is_stale && (
         <p className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-warning-900">{t("versions.stale")}</p>
       )}
@@ -185,7 +225,12 @@ export default function ApprovalsPanel({
           <Card>
             <CardBody className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="font-bold">{t("approval.title")}</h3>
+                <div>
+                  <h3 className="font-bold">{workflow.route_name || t("approval.title")}</h3>
+                  {workflow.workflow_type && (
+                    <p className="text-xs text-neutral-500">{t(`approval.workflowType.${workflow.workflow_type}` as TKey)}</p>
+                  )}
+                </div>
                 <Badge tone={workflow.status === "approved" ? "success" : workflow.status === "in_progress" ? "info" : "warning"}>
                   {t(`approval.workflow.${workflow.status}` as TKey)}
                 </Badge>
@@ -195,31 +240,37 @@ export default function ApprovalsPanel({
                 <p>{t("approval.approvedCount")}: {workflow.approved_count}</p>
                 <p>{t("approval.remainingCount")}: {workflow.remaining_count}</p>
               </div>
+              {/* Total is always workflow.steps.length — never assumed to be
+                  four. A one-step or six-step route renders identically. */}
               <ProgressBar
                 value={workflow.approved_count}
-                max={workflow.approved_count + workflow.remaining_count || 1}
+                max={workflow.steps.length || 1}
                 tone="brand"
                 label={t("dashboard.section.approvalProgress")}
               />
               <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {CHAIN.map(({ role, labelKey }, idx) => {
-                  const step = workflow.steps.find((s) => s.role === role);
-                  const isCurrent =
-                    step?.step_order === workflow.current_step_order && step.status === "pending";
+                {workflow.steps.map((step) => {
+                  const isCurrent = step.step_order === workflow.current_step_order && step.status === "pending";
+                  const outOfOrder = step.status === "locked" && step.step_order < workflow.current_step_order;
                   return (
                     <li
-                      key={role}
+                      key={step.id}
                       className={cn(
                         "surface-card p-4 text-sm",
                         isCurrent && "ring-2 ring-brand-600/30",
-                        step?.status === "approved" && "border-success-200/80"
+                        step.status === "approved" && "border-success-200/80"
                       )}
                     >
-                      <p className="font-semibold text-neutral-900">{t(labelKey)}</p>
-                      <p className="text-xs text-neutral-500">{step?.approver_name ?? "—"}</p>
-                      <p className="mt-2 text-xs font-medium">{t(`approval.step.${step?.status ?? "locked"}` as TKey)}</p>
-                      {step?.acted_at && <p className="text-xs text-neutral-400">{step.acted_at.slice(0, 16)}</p>}
-                      {step?.comment && <p className="mt-1 text-xs italic text-neutral-600">{step.comment}</p>}
+                      <p className="text-xs font-semibold uppercase text-neutral-400">{step.step_order}</p>
+                      <p className="font-semibold text-neutral-900">{roleLabel(t, step.role)}</p>
+                      <p className="text-xs text-neutral-500">{step.approver_name ?? "—"}</p>
+                      {step.required === false && (
+                        <Badge tone="subtle" className="mt-1">{t("approval.routeBuilder.optionalTag")}</Badge>
+                      )}
+                      <p className="mt-2 text-xs font-medium">{t(`approval.step.${step.status}` as TKey)}</p>
+                      {outOfOrder && <p className="text-xs text-warning-700">{t("approval.notActionable")}</p>}
+                      {step.acted_at && <p className="text-xs text-neutral-400">{step.acted_at.slice(0, 16)}</p>}
+                      {step.comment && <p className="mt-1 text-xs italic text-neutral-600">{step.comment}</p>}
                     </li>
                   );
                 })}
@@ -255,8 +306,8 @@ export default function ApprovalsPanel({
 
           {active && !actionable && (
             <p className="text-sm text-neutral-500">
-              {requiredRoleLabelKey
-                ? `${t("approval.waitingFor")} ${t(requiredRoleLabelKey)}`
+              {workflow.current_required_role
+                ? `${t("approval.waitingFor")} ${roleLabel(t, workflow.current_required_role)}`
                 : t("approval.notActionable")}
             </p>
           )}

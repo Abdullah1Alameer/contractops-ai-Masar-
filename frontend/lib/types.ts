@@ -659,6 +659,7 @@ export interface ApprovalStepRow {
   role: string;
   approver_name: string | null;
   status: string;
+  required?: boolean;
   comment: string | null;
   acted_at: string | null;
 }
@@ -686,11 +687,58 @@ export interface ApprovalWorkflowView {
   is_stale?: boolean;
   override_used?: boolean;
   version_id?: string | null;
+  route_name?: string | null;
+  contract_route_id?: string | null;
+  // The backend engine only ever gates the next step on the previous one
+  // being resolved — always "sequential" today. Never rendered as if
+  // parallel/mixed execution were actually possible.
+  workflow_type?: "sequential";
 }
 
 export interface ApprovalsResponse {
   workflow: ApprovalWorkflowView | null;
   unresolved_negotiations: { id: string; clause_ref: string | null; workflow_status: string }[];
+}
+
+// Configurable approval routes — see docs/configurable-approval-routes-report.md.
+export interface ApprovalRouteStepInput {
+  role: string;
+  approver_name?: string | null;
+  required?: boolean;
+}
+
+export interface ApprovalRouteStepRow {
+  id: string;
+  step_order: number;
+  role: string;
+  approver_name: string | null;
+  required: boolean;
+}
+
+export interface SavedApprovalRoute {
+  id: string;
+  name: string;
+  scope: string;
+  active: boolean;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  steps: ApprovalRouteStepRow[];
+  step_count: number;
+}
+
+export interface ContractApprovalRoute {
+  id: string;
+  contract_id: string;
+  name: string | null;
+  source_route_id: string | null;
+  status: "draft" | "started" | "cancelled";
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  steps: ApprovalRouteStepRow[];
+  step_count: number;
+  workflow_type: "sequential";
 }
 
 export interface ActivityEventRow {

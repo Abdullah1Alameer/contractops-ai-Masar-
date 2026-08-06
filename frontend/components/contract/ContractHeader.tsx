@@ -76,7 +76,7 @@ export default function ContractHeader({
           )}
           {stage === "internal_review" && onStartApproval && (
             <Button variant="secondary" size="sm" onClick={onStartApproval}>
-              {t("approval.start")}
+              {t("approval.configureRoute")}
             </Button>
           )}
           {stage === "ready_to_sign" && onCreateSignature && (

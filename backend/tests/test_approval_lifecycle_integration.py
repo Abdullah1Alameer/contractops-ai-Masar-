@@ -122,7 +122,36 @@ def add_signature_request(db, contract, version, *, status: str = "sent") -> Sig
     return request
 
 
-def start_approval(client: TestClient, contract_id, *, role: str = "legal", body: dict | None = None):
+def configure_route(client: TestClient, contract_id, *, role: str = "legal", roles: list[str] | None = None, name: str | None = None):
+    steps = [{"role": r} for r in (roles or ROLE_SEQUENCE)]
+    return client.put(
+        f"/api/contracts/{contract_id}/approval-route",
+        headers=auth(role),
+        json={"name": name, "steps": steps},
+    )
+
+
+def start_approval(client: TestClient, contract_id, *, role: str = "legal", body: dict | None = None, roles: list[str] | None = None):
+    """Configures the (default four-role, unless overridden) route and
+    starts the workflow — mirrors the real UI flow (configure, then start).
+    Route configuration always uses an admin-eligible role ("legal"),
+    independent of `role` (the acting role for the *start*/override call
+    itself, which several tests exercise with non-admin roles on purpose).
+    Skips (re)configuring when a workflow is already active, exactly like
+    the frontend does (it would show the active workflow, not the route
+    builder), so a second call correctly surfaces approval_already_active
+    from start_workflow itself rather than approval_route_locked from a
+    redundant configure attempt."""
+    probe = client.get(f"/api/contracts/{contract_id}/approvals", headers=auth(role))
+    has_active = (
+        probe.status_code == 200
+        and probe.json().get("workflow") is not None
+        and probe.json()["workflow"]["status"] == "in_progress"
+    )
+    if not has_active:
+        configured = configure_route(client, contract_id, role="legal", roles=roles)
+        if configured.status_code != 200:
+            return configured
     return client.post(
         f"/api/contracts/{contract_id}/approvals/start",
         headers=auth(role),
@@ -301,18 +330,17 @@ def test_duplicate_start_returns_approval_already_active(approval_db):
     assert len(workflows(db, contract.id)) == 1
 
 
-def test_start_with_unknown_approver_role_is_rejected(approval_db):
+def test_configure_route_with_unknown_approver_role_is_rejected(approval_db):
+    # Superseded: "approver_names" no longer exists on /approvals/start —
+    # role validation now happens when the route is configured, not when
+    # a fixed sequence is (no longer) resolved at start time.
     db, create_contract = approval_db
     contract, _ = create_contract()
 
-    response = start_approval(
-        TestClient(app),
-        contract.id,
-        body={"approver_names": {"chief_pirate": "Nobody"}},
-    )
+    response = configure_route(TestClient(app), contract.id, roles=["chief_pirate"])
 
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "invalid_approval_sequence"
+    assert response.json()["detail"]["error"] == "invalid_approver"
     assert workflows(db, contract.id) == []
 
 

@@ -2,7 +2,11 @@ from fastapi import Header, HTTPException
 
 from .config import DEMO_TOKEN
 
-ALLOWED_DEMO_ROLES = frozenset({"business_owner", "legal", "finance", "executive"})
+# "sales" and "manager" were added for configurable approval routes (see
+# docs/configurable-approval-routes-report.md) — a route step can require
+# either, so the demo role switcher must be able to claim them. Additive
+# only; the original four roles are unchanged.
+ALLOWED_DEMO_ROLES = frozenset({"business_owner", "legal", "finance", "executive", "sales", "manager"})
 
 
 def require_token(authorization: str | None = Header(default=None)):
