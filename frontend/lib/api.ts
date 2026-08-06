@@ -139,6 +139,18 @@ export async function fetchContractFileBlob(contractId: string): Promise<Blob> {
   return res.blob();
 }
 
+// The guaranteed-renderable document for a signature request's field
+// placement viewer — a real PDF snapshot tied to the request's exact
+// version, never the contract's raw (possibly non-PDF) upload. See
+// docs/signature-placement-viewer-fix-report.md.
+export async function fetchSignatureRequestDocumentBlob(requestId: string): Promise<Blob> {
+  const res = await fetch(`${BASE}/api/signature-requests/${requestId}/document`, {
+    headers: { Authorization: `Bearer ${TOKEN}`, ...demoRoleHeader() },
+  });
+  if (!res.ok) await parseError(res);
+  return res.blob();
+}
+
 export async function reextractContractText(contractId: string) {
   return apiJson<{ reanchored: number; unverified: number; pages: number }>(
     `/api/contracts/${contractId}/reextract-text`,

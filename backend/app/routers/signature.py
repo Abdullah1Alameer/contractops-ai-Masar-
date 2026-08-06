@@ -169,6 +169,21 @@ def download_signed_document(request_id: uuid.UUID, db: Session = Depends(get_db
     return Response(content=data, media_type="application/pdf")
 
 
+@router.get("/signature-requests/{request_id}/document")
+def get_signature_request_document(request_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Guaranteed-renderable document for the internal field-placement
+    viewer — the same real-PDF snapshot (original upload if it was
+    actually a PDF, otherwise a generated PDF from the extracted text)
+    the public signer will see, tied to this request's specific version.
+    Never the contract's raw upload directly — see
+    docs/signature-placement-viewer-fix-report.md."""
+    try:
+        data = sig_svc.get_document_bytes_for_request(request_id, db)
+    except ValueError as e:
+        raise _map_err(sig_svc.SignatureError(404, str(e)))
+    return Response(content=data, media_type="application/pdf")
+
+
 @router.get("/signature-requests/{request_id}/fields")
 def get_signature_fields(request_id: uuid.UUID, db: Session = Depends(get_db)):
     return {"fields": [sig_svc.serialize_field(f) for f in sig_svc.list_fields(request_id, db)]}

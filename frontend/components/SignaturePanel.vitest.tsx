@@ -41,7 +41,8 @@ vi.mock("@/lib/api", () => ({
   sendSignatureRequest: (...args: unknown[]) => sendSignatureRequest(...args),
   // SignatureFieldPlacer's dependencies — not under test here, so a
   // never-resolving/no-op stub is enough to keep the panel from crashing.
-  fetchContractFileBlob: () => new Promise(() => {}),
+  fetchSignatureRequestDocumentBlob: () => new Promise(() => {}),
+  api: () => new Promise(() => {}),
   suggestSignatureFields: vi.fn(),
   saveSignatureFields: vi.fn(),
 }));

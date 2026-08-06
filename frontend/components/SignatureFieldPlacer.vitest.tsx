@@ -4,25 +4,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("pdfjs-dist", () => ({
   GlobalWorkerOptions: { workerSrc: "" },
-  getDocument: () => ({
-    promise: Promise.resolve({
-      numPages: 2,
-      getPage: () =>
-        Promise.resolve({
-          getViewport: () => ({ width: 595, height: 842, scale: 1.2 }),
-          render: () => ({ promise: Promise.resolve() }),
-        }),
-    }),
+  getDocument: (opts: { data: ArrayBuffer }) => ({
+    promise:
+      // The "broken PDF" tests feed a buffer tagged with a sentinel byte
+      // pattern so this mock can simulate a genuine parse failure without
+      // needing a real corrupt-PDF fixture.
+      new Uint8Array(opts.data).length > 0 && new Uint8Array(opts.data)[0] === 0xff
+        ? Promise.reject(new Error("invalid PDF structure"))
+        : Promise.resolve({
+            numPages: 2,
+            getPage: () =>
+              Promise.resolve({
+                getViewport: () => ({ width: 595, height: 842, scale: 1.2 }),
+                render: () => ({ promise: Promise.resolve() }),
+              }),
+          }),
   }),
 }));
 
-const fetchContractFileBlob = vi.fn();
+const fetchSignatureRequestDocumentBlob = vi.fn();
 const suggestSignatureFields = vi.fn();
 const saveSignatureFields = vi.fn();
+const api = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   apiErrorCode: (_error: unknown, fallback: string) => fallback,
-  fetchContractFileBlob: (...args: unknown[]) => fetchContractFileBlob(...args),
+  api: (...args: unknown[]) => api(...args),
+  fetchSignatureRequestDocumentBlob: (...args: unknown[]) => fetchSignatureRequestDocumentBlob(...args),
   suggestSignatureFields: (...args: unknown[]) => suggestSignatureFields(...args),
   saveSignatureFields: (...args: unknown[]) => saveSignatureFields(...args),
 }));
@@ -62,21 +70,149 @@ function renderPlacer(props: Partial<React.ComponentProps<typeof SignatureFieldP
 
 afterEach(cleanup);
 
-function fakePdfBlob(): Blob {
-  // jsdom's Blob shim has no arrayBuffer() implementation — stub one so the
-  // component's `await blob.arrayBuffer()` resolves instead of throwing.
+// jsdom's Blob shim has no arrayBuffer() implementation — stub one so the
+// component's `await blob.arrayBuffer()` resolves instead of throwing.
+// `firstByte` lets a test simulate a genuinely broken/corrupt PDF (see the
+// pdfjs mock above).
+function fakePdfBlob(firstByte = 0x25 /* '%' as in %PDF */): Blob {
   const blob = new Blob(["%PDF-1.4"], { type: "application/pdf" });
   (blob as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer = () =>
-    Promise.resolve(new ArrayBuffer(8));
+    Promise.resolve(new Uint8Array([firstByte, 0, 0, 0]).buffer);
   return blob;
 }
 
+const RAW_PAGE_1 = {
+  page: 1,
+  text: "البند الأول: يلتزم الطرف الأول بتقديم الخدمات المتفق عليها.",
+  char_start: 0,
+  total_pages: 2,
+  blocks: [],
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  fetchContractFileBlob.mockResolvedValue(fakePdfBlob());
+  fetchSignatureRequestDocumentBlob.mockResolvedValue(fakePdfBlob());
 });
 
-describe("SignatureFieldPlacer", () => {
+describe("SignatureFieldPlacer — document source (the viewer bug fix)", () => {
+  it("fetches the signature request's own document, not the contract's raw upload", async () => {
+    renderPlacer();
+    await waitFor(() => expect(fetchSignatureRequestDocumentBlob).toHaveBeenCalledWith("request-1"));
+  });
+
+  it("uploaded-PDF-sourced request: renders the PDF in the placement view", async () => {
+    renderPlacer();
+
+    await waitFor(() => expect(document.querySelector("canvas")).toBeTruthy());
+    expect(screen.queryByText("تعذّر عرض المستند: لا يوجد ملف PDF صالح ولا نص مستخرج لهذا العقد. يرجى إعادة استخراج النص أو رفع نسخة صالحة من المستند قبل تحديد مواضع التوقيع.")).toBeNull();
+  });
+
+  it("DOCX-sourced / template-generated request: the endpoint already returns a real PDF, so it renders identically — no special-casing needed on the frontend", async () => {
+    // Whether the original upload was PDF, DOCX, or a generated template
+    // document, /api/signature-requests/{id}/document always returns a
+    // real, renderable PDF (backend-guaranteed) — the frontend doesn't
+    // need to know or care which source it came from.
+    fetchSignatureRequestDocumentBlob.mockResolvedValue(fakePdfBlob());
+    renderPlacer();
+
+    await waitFor(() => expect(document.querySelector("canvas")).toBeTruthy());
+  });
+
+  it("broken PDF: falls back to real extracted text, not a blank area with a misleading claim", async () => {
+    fetchSignatureRequestDocumentBlob.mockResolvedValue(fakePdfBlob(0xff));
+    api.mockResolvedValue(RAW_PAGE_1);
+    renderPlacer();
+
+    await screen.findByText(RAW_PAGE_1.text);
+    // The fallback disclosure is shown *alongside* real, visible content —
+    // never alone over a blank area.
+    expect(screen.getByText("تعذّر عرض ملف PDF. يتم عرض النص المستخرج الآمن بدلاً منه.")).toBeTruthy();
+    expect(document.querySelector("canvas")).toBeNull();
+  });
+
+  it("text fallback includes the actual extracted contract content, not placeholder text", async () => {
+    fetchSignatureRequestDocumentBlob.mockResolvedValue(fakePdfBlob(0xff));
+    api.mockResolvedValue({
+      ...RAW_PAGE_1,
+      text: "المادة الخامسة: يُحظر على الطرف الثاني التنازل عن هذا العقد دون موافقة كتابية مسبقة.",
+    });
+    renderPlacer();
+
+    expect(await screen.findByText("المادة الخامسة: يُحظر على الطرف الثاني التنازل عن هذا العقد دون موافقة كتابية مسبقة.")).toBeTruthy();
+  });
+
+  it("text fallback renders clause blocks (heading/content layout) when block data is available", async () => {
+    fetchSignatureRequestDocumentBlob.mockResolvedValue(fakePdfBlob(0xff));
+    api.mockResolvedValue({
+      page: 1,
+      text: "ignored when blocks are present",
+      char_start: 0,
+      total_pages: 1,
+      blocks: [
+        { text: "البند الأول — نطاق العمل", bbox: [0, 0, 100, 20], direction: "rtl", column: 1 },
+        { text: "يلتزم مقدم الخدمة بتنفيذ الأعمال وفق الجدول الزمني المتفق عليه.", bbox: [0, 20, 100, 40], direction: "rtl", column: 1 },
+      ],
+    });
+    renderPlacer();
+
+    expect(await screen.findByText("البند الأول — نطاق العمل")).toBeTruthy();
+    expect(screen.getByText("يلتزم مقدم الخدمة بتنفيذ الأعمال وفق الجدول الزمني المتفق عليه.")).toBeTruthy();
+  });
+
+  it("no-document state: shows an honest, deterministic error — never claims a fallback that isn't there", async () => {
+    fetchSignatureRequestDocumentBlob.mockRejectedValue(new Error("not_found"));
+    api.mockRejectedValue(new Error("not_found"));
+    renderPlacer();
+
+    expect(
+      await screen.findByText(
+        "تعذّر عرض المستند: لا يوجد ملف PDF صالح ولا نص مستخرج لهذا العقد. يرجى إعادة استخراج النص أو رفع نسخة صالحة من المستند قبل تحديد مواضع التوقيع."
+      )
+    ).toBeTruthy();
+    // Never the misleading "showing extracted text" claim when nothing is shown.
+    expect(screen.queryByText("تعذّر عرض ملف PDF. يتم عرض النص المستخرج الآمن بدلاً منه.")).toBeNull();
+  });
+
+  it("fields cannot be saved while the viewer shows no document (empty state)", async () => {
+    fetchSignatureRequestDocumentBlob.mockRejectedValue(new Error("not_found"));
+    api.mockRejectedValue(new Error("not_found"));
+    renderPlacer();
+
+    await screen.findByText("يجب تحميل نسخة مرئية من المستند قبل حفظ مواضع الحقول");
+    const saveButton = screen.getByText("حفظ مواضع الحقول").closest("button") as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("fields cannot be saved while the document is still loading", () => {
+    fetchSignatureRequestDocumentBlob.mockReturnValue(new Promise(() => {})); // never resolves
+    renderPlacer();
+
+    const saveButton = screen.getByText("حفظ مواضع الحقول").closest("button") as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("switching to a different signature request refetches and refreshes the displayed document", async () => {
+    const { rerender } = renderPlacer({ requestId: "request-1" });
+    await waitFor(() => expect(fetchSignatureRequestDocumentBlob).toHaveBeenCalledWith("request-1"));
+
+    rerender(
+      <I18nProvider>
+        <SignatureFieldPlacer
+          contractId="contract-1"
+          requestId="request-2"
+          signers={SIGNERS}
+          initialFields={[]}
+          locked={false}
+          onSaved={vi.fn()}
+        />
+      </I18nProvider>
+    );
+
+    await waitFor(() => expect(fetchSignatureRequestDocumentBlob).toHaveBeenCalledWith("request-2"));
+  });
+});
+
+describe("SignatureFieldPlacer — existing behavior preserved", () => {
   it("warns that a signature field is missing until every signer has one", async () => {
     renderPlacer();
     expect(await screen.findByText("كل موقّع يحتاج حقل توقيع واحد على الأقل قبل الإرسال")).toBeTruthy();
@@ -86,8 +222,7 @@ describe("SignatureFieldPlacer", () => {
     saveSignatureFields.mockResolvedValue({ fields: [] });
     renderPlacer();
 
-    const canvas = await screen.findByRole("img", { hidden: true }).catch(() => null);
-    // Fall back to querying the canvas directly since <canvas> has no default role.
+    await waitFor(() => expect(document.querySelector("canvas")).toBeTruthy());
     const surface = document.querySelector("canvas")!.parentElement!;
     fireEvent.click(surface, { clientX: 100, clientY: 100 });
 
@@ -111,6 +246,7 @@ describe("SignatureFieldPlacer", () => {
       ],
     });
     renderPlacer();
+    await waitFor(() => expect(document.querySelector("canvas")).toBeTruthy());
 
     fireEvent.click(await screen.findByText("اقتراح مواضع بالذكاء الاصطناعي"));
 

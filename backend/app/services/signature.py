@@ -994,6 +994,26 @@ def activate_contract(request_id, db: Session, *, actor: str, reason: str | None
     return serialize_request_bundle(req, db)
 
 
+def _document_bytes_for_request(req: SignatureRequest, db: Session) -> bytes:
+    """The guaranteed-renderable document for a signature request: the
+    real PDF snapshot taken at create_request() time
+    (original_bytes(contract) — a real PDF pass-through, or a generated
+    PDF from the extracted text when the source wasn't a PDF), falling
+    back to regenerating it live if the snapshot is somehow missing. This
+    is what both the public signer portal and the internal field-placement
+    viewer must read — never the contract's raw, possibly-non-PDF upload
+    directly. See docs/signature-placement-viewer-fix-report.md."""
+    if req.original_file_url:
+        try:
+            return storage.get(req.original_file_url)
+        except FileNotFoundError:
+            pass
+    contract = db.get(Contract, req.contract_id)
+    if contract:
+        return original_bytes(contract)
+    raise ValueError("not_found")
+
+
 def get_document_bytes(raw_token: str, db: Session) -> bytes:
     signer = get_signer_by_token(raw_token, db)
     if signer is None:
@@ -1004,12 +1024,17 @@ def get_document_bytes(raw_token: str, db: Session) -> bytes:
     expire_if_needed(req, db)
     if req.status == "expired":
         raise ValueError("expired")
-    if req.original_file_url:
-        return storage.get(req.original_file_url)
-    contract = db.get(Contract, req.contract_id)
-    if contract:
-        return original_bytes(contract)
-    raise ValueError("not_found")
+    return _document_bytes_for_request(req, db)
+
+
+def get_document_bytes_for_request(request_id, db: Session) -> bytes:
+    """Internal (bearer-token-protected) counterpart of get_document_bytes,
+    for the field-placement viewer — same guaranteed-renderable document,
+    addressed by request_id instead of a signer's public token."""
+    req = get_request_by_id(request_id, db)
+    if req is None:
+        raise ValueError("not_found")
+    return _document_bytes_for_request(req, db)
 
 
 def build_invitation_email(contract: Contract, req: SignatureRequest, signer: SignatureSigner, link: str) -> dict:
