@@ -161,6 +161,20 @@ export interface RiskBreakdownItem {
   count: number;
   points: number;
   explanation: string;
+  explanation_ar?: string;
+}
+
+export interface RiskFindingItem {
+  id: string;
+  category: string;
+  code: string;
+  points: number;
+  count: number;
+  explanation: string | null;
+  explanation_ar: string | null;
+  link_tab: string | null;
+  source_clause_id: string | null;
+  source: ClauseSource | null;
 }
 
 export interface RiskSummary {
@@ -169,7 +183,7 @@ export interface RiskSummary {
   breakdown: RiskBreakdownItem[];
   calculation_version: string;
   generated_at?: string;
-  findings?: Array<Record<string, unknown>>;
+  findings?: RiskFindingItem[];
 }
 
 export interface ObligationRow {

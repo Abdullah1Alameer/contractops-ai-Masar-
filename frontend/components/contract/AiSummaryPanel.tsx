@@ -45,6 +45,12 @@ export default function AiSummaryPanel({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [lang, setLang] = useState<"ar" | "en">(uiLang === "ar" ? "ar" : "en");
+  // Traceability fix: citations only ever jumped away to the document
+  // (correct, kept as-is), but a legal user could not see what a citation
+  // actually pointed to without leaving the summary. Toggling now shows
+  // the exact quoted clause text inline first. See
+  // docs/analysis-traceability-audit.md.
+  const [openCitation, setOpenCitation] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -191,18 +197,41 @@ export default function AiSummaryPanel({
                         <li key={i} dir="auto" className="bidi-plaintext">
                           {item.text}
                           {item.citations?.length > 0 && (
-                            <span className="mt-1 flex flex-wrap gap-1">
-                              {item.citations.map((c, j) => (
-                                <button
-                                  key={j}
-                                  type="button"
-                                  className="rounded bg-brand-50 px-1.5 py-0.5 text-xs text-brand-700 hover:bg-brand-100"
-                                  onClick={() => cite(c)}
-                                >
-                                  {t("summary.citation")} p.{c.page}
-                                </button>
-                              ))}
-                            </span>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {item.citations.map((c, j) => {
+                                const citationKey = `${key}-${i}-${j}`;
+                                const open = openCitation === citationKey;
+                                return (
+                                  <span key={j} className="flex flex-col gap-1">
+                                    <span className="flex flex-wrap gap-1">
+                                      <button
+                                        type="button"
+                                        className="rounded bg-brand-50 px-1.5 py-0.5 text-xs text-brand-700 hover:bg-brand-100"
+                                        onClick={() => setOpenCitation(open ? null : citationKey)}
+                                      >
+                                        {c.clause_ref ? `${t("detail.clause")} ${c.clause_ref} · ` : ""}
+                                        {t("summary.citation")} p.{c.page}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 hover:bg-gray-200"
+                                        onClick={() => cite(c)}
+                                      >
+                                        {t("evidence.jumpToClause")}
+                                      </button>
+                                    </span>
+                                    {open && (
+                                      <span
+                                        dir="auto"
+                                        className="bidi-plaintext block max-w-md whitespace-pre-wrap rounded border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700"
+                                      >
+                                        {c.quote}
+                                      </span>
+                                    )}
+                                  </span>
+                                );
+                              })}
+                            </div>
                           )}
                         </li>
                       ))}

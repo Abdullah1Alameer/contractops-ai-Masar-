@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models import Contract, Deadline, Obligation, PaymentMilestone, RiskFinding
+from ..models import Clause, Contract, Deadline, Obligation, PaymentMilestone, RiskFinding
 from .date_semantics import sync_contract_date_semantics
 
 CALCULATION_VERSION = "risk-v2"
@@ -124,12 +124,33 @@ def serialize_risk(contract_id, db: Session) -> dict[str, Any]:
     for f in findings:
         cat = f.category
         if cat not in breakdown_map:
-            breakdown_map[cat] = {"category": cat, "count": 0, "points": 0, "explanation": f.explanation or ""}
+            breakdown_map[cat] = {
+                "category": cat,
+                "count": 0,
+                "points": 0,
+                # Both languages, so the frontend can localize the category
+                # rollup exactly like it already does for each individual
+                # finding, instead of only ever showing whichever language
+                # happened to be recorded first for this category.
+                "explanation": f.explanation or "",
+                "explanation_ar": f.explanation_ar or "",
+            }
         breakdown_map[cat]["count"] += f.count
         breakdown_map[cat]["points"] += f.points
 
     breakdown = list(breakdown_map.values())
     score = sum(b["points"] for b in breakdown)
+
+    # Resolve each finding's source clause (when it has one) into the same
+    # {clause_ref, quote, page, char_start, char_end} shape obligations
+    # already expose — a risk finding was previously only traceable to an
+    # opaque source_clause_id with no way for the UI to show the original
+    # text or jump to it. See docs/analysis-traceability-audit.md.
+    clause_ids = {f.source_clause_id for f in findings if f.source_clause_id}
+    clauses = {}
+    if clause_ids:
+        clauses = {cl.id: cl for cl in db.query(Clause).filter(Clause.id.in_(clause_ids))}
+
     return {
         "score": score,
         "level": _level(score),
@@ -147,6 +168,17 @@ def serialize_risk(contract_id, db: Session) -> dict[str, Any]:
                 "explanation_ar": f.explanation_ar,
                 "link_tab": f.link_tab,
                 "source_clause_id": str(f.source_clause_id) if f.source_clause_id else None,
+                "source": (
+                    {
+                        "clause_ref": clauses[f.source_clause_id].clause_ref,
+                        "quote": clauses[f.source_clause_id].quote,
+                        "page": clauses[f.source_clause_id].page,
+                        "char_start": clauses[f.source_clause_id].char_start,
+                        "char_end": clauses[f.source_clause_id].char_end,
+                    }
+                    if f.source_clause_id and f.source_clause_id in clauses
+                    else None
+                ),
             }
             for f in findings
         ],

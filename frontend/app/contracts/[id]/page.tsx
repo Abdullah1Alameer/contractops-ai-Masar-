@@ -19,6 +19,7 @@ import StatusChip from "@/components/StatusChip";
 import TypeBadge from "@/components/TypeBadge";
 import ContractHeader from "@/components/contract/ContractHeader";
 import AiSummaryPanel from "@/components/contract/AiSummaryPanel";
+import ClauseEvidenceCard from "@/components/contract/ClauseEvidenceCard";
 import WorkflowStepper from "@/components/contract/WorkflowStepper";
 import ReviewHistoryPanel from "@/components/ReviewHistoryPanel";
 import SendForReviewDialog from "@/components/SendForReviewDialog";
@@ -183,6 +184,30 @@ export default function ContractDetailPage() {
       setTarget({ page: src.page, char_start: 0, char_end: 0, quote: src.quote });
   };
 
+  // Bug fix: DeadlineTimeline/PaymentTracker's "view clause" action only
+  // ever called setTarget directly, never switching to the document tab —
+  // so clicking it silently updated state the user could not see while
+  // staying on the Timeline/Milestones tab. jump() (used everywhere else)
+  // already does both; this wrapper gives these two callers the same
+  // real navigation. See docs/analysis-traceability-audit.md.
+  const jumpToDocument = (target: SourceTarget) => {
+    setTab("clauses");
+    setTarget(target);
+  };
+
+  // No LLM-generated "why was this extracted" narrative exists per
+  // obligation (the extraction schema never asked for one — see
+  // docs/analysis-traceability-audit.md). Composed honestly from whatever
+  // structured fields the extraction actually produced, rather than
+  // inventing a fake explanation; returns null (shown as "unavailable")
+  // when nothing usable exists.
+  const obligationReasoning = (o: ObligationRow): string | null => {
+    const parts: string[] = [];
+    if (o.trigger_event) parts.push(`${t("evidence.triggerEvent")}: ${o.trigger_event}`);
+    if (o.completion_criteria) parts.push(`${t("evidence.completionCriteria")}: ${o.completion_criteria}`);
+    return parts.length ? parts.join(" — ") : null;
+  };
+
   const toggleObligation = async (o: ObligationRow) => {
     const next = o.status === "done" ? "pending" : "done";
     setObligations((rows) => rows.map((r) => (r.id === o.id ? { ...r, status: next } : r)));
@@ -251,6 +276,10 @@ export default function ContractDetailPage() {
 
   const riskScore = detail?.risk?.score ?? 0;
   const riskBreakdown = detail?.risk?.breakdown ?? [];
+  // Already returned by GET /contracts/{id} (serialize_risk()) — never
+  // rendered before, only the category rollup was. See
+  // docs/analysis-traceability-audit.md.
+  const riskFindings = detail?.risk?.findings ?? [];
 
   const noticeDeadlineByPurpose = (() => {
     const map = new Map<string, DeadlineRow>();
@@ -401,6 +430,28 @@ export default function ContractDetailPage() {
                                 <SourceButton src={o.source} />
                                 {o.confidence != null && <ConfidenceChip confidence={o.confidence} />}
                               </div>
+                              <ClauseEvidenceCard
+                                quote={o.source?.quote ?? null}
+                                clauseRef={o.source?.clause_ref ?? null}
+                                page={o.source?.page ?? null}
+                                confidence={o.confidence}
+                                verified={!!(o.source?.char_start != null && o.source?.char_end != null)}
+                                reasoning={obligationReasoning(o)}
+                                onJump={o.source ? () => jump(o.source) : undefined}
+                                metadata={(
+                                  [
+                                    { label: "obligation.party", value: o.responsible_party },
+                                    { label: "evidence.beneficiary", value: o.beneficiary },
+                                    { label: "obligation.due", value: o.due_date ? formatDate(o.due_date, lang) : null },
+                                    { label: "obligation.penalty", value: o.penalty_text },
+                                    { label: "evidence.triggerEvent", value: o.trigger_event },
+                                    { label: "evidence.completionCriteria", value: o.completion_criteria },
+                                    { label: "evidence.dependencies", value: o.dependencies?.length ? o.dependencies.join("، ") : null },
+                                    { label: "evidence.requiredEvidence", value: o.contract_required_evidence?.length ? o.contract_required_evidence.join("، ") : null },
+                                    { label: "evidence.suggestedEvidence", value: o.suggested_evidence?.length ? o.suggested_evidence.join("، ") : null },
+                                  ] as { label: TKey; value: string | null | undefined }[]
+                                ).filter((m) => m.value != null && m.value !== "")}
+                              />
                             </td>
                             <td className="px-3 py-3.5 text-gray-600">{o.responsible_party ?? "—"}</td>
                             <td className="px-3 py-3.5">{o.due_date ? <DualDate date={o.due_date} /> : <span className="text-gray-400">{t("obligation.noDue")}</span>}</td>
@@ -493,6 +544,25 @@ export default function ContractDetailPage() {
                           )}
                         </div>
                         </div>
+                        <ClauseEvidenceCard
+                          quote={n.quote ?? null}
+                          clauseRef={n.clause_ref}
+                          page={n.page}
+                          confidence={n.confidence}
+                          verified={n.verified && n.char_start != null}
+                          reasoning={
+                            resolved?.needs_review
+                              ? t("detail.noticeRequiresReview")
+                              : resolved?.calculation_explanation ?? null
+                          }
+                          onJump={() => jump(n)}
+                          metadata={(
+                            [
+                              { label: "deadline.responsibleParty", value: resolved?.responsible_party },
+                              { label: "obligation.due", value: resolved?.computed_date ? formatDate(resolved.computed_date, lang) : null },
+                            ] as { label: TKey; value: string | null | undefined }[]
+                          ).filter((m) => m.value != null && m.value !== "")}
+                        />
                       </li>
                     );})}
                   </ul>
@@ -514,7 +584,7 @@ export default function ContractDetailPage() {
                         demoToday={demoToday}
                         contractStatus={detail.status}
                         refreshKey={timelineRefresh}
-                        onSourceClick={setTarget}
+                        onSourceClick={jumpToDocument}
                       />
                     </>
                   )}
@@ -528,7 +598,7 @@ export default function ContractDetailPage() {
                   demoToday={demoToday}
                   contractStatus={detail.status}
                   refreshKey={timelineRefresh}
-                  onSourceClick={setTarget}
+                  onSourceClick={jumpToDocument}
                 />
             ) : (
               <p className="text-sm text-gray-500">{t("common.loading")}</p>
@@ -588,13 +658,52 @@ export default function ContractDetailPage() {
                   {riskBreakdown.map((b) => (
                     <li key={b.category} className="surface-card p-3">
                       <p className="font-medium text-gray-900">
-                        {b.category} · +{b.points}
+                        {t(`risk.category.${b.category}` as TKey)} · +{b.points}
                       </p>
-                      <p className="text-xs text-gray-600">{b.explanation}</p>
+                      <p className="text-xs text-gray-600">{(lang === "ar" ? b.explanation_ar : b.explanation) || b.explanation}</p>
                     </li>
                   ))}
                 </ul>
               </div>
+            </div>
+
+            <div className="mt-6 border-t pt-4">
+              <h4 className="mb-3 text-sm font-semibold text-gray-800">{t("risk.findings.title")}</h4>
+              {riskFindings.length === 0 ? (
+                <p className="text-hint">{t("risk.findings.empty")}</p>
+              ) : (
+                <ul className="space-y-2">
+                  {riskFindings.map((f) => (
+                    <li key={f.id} className="surface-card p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium text-gray-900">{t(`risk.category.${f.category}` as TKey)}</p>
+                        {f.link_tab && (
+                          <button
+                            type="button"
+                            onClick={() => setTab(f.link_tab as Tab)}
+                            className="rounded-md bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-100"
+                          >
+                            {t("risk.findings.linkedTab")}: {t(`detail.tab.${f.link_tab}` as TKey)}
+                          </button>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-gray-600">
+                        {(lang === "ar" ? f.explanation_ar : f.explanation) || f.explanation}
+                      </p>
+                      <ClauseEvidenceCard
+                        quote={f.source?.quote ?? null}
+                        clauseRef={f.source?.clause_ref ?? null}
+                        page={f.source?.page ?? null}
+                        confidence={null}
+                        verified={!!(f.source?.char_start != null && f.source?.char_end != null)}
+                        reasoning={(lang === "ar" ? f.explanation_ar : f.explanation) || f.explanation}
+                        onJump={f.source ? () => jump(f.source) : undefined}
+                        metadata={[]}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </TabPanel>
 
