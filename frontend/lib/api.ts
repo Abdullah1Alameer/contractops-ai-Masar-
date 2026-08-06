@@ -283,6 +283,22 @@ export async function fetchReviewPortal(token: string) {
   return publicApi<import("./types").ReviewPortalPayload>(`/api/review/${encodeURIComponent(token)}`);
 }
 
+// The contract itself, as a guaranteed-renderable PDF — same single
+// source of truth as the internal file endpoint and the signer portal's
+// `publicSignDocumentUrl`. Token-gated, unauthenticated (public route),
+// so a raw URL (for the embedded viewer / open-in-new-tab) is enough —
+// no bearer token or demo-role header applies to public review routes.
+export function publicReviewDocumentUrl(token: string) {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  return `${base}/api/review/${encodeURIComponent(token)}/document`;
+}
+
+export async function fetchReviewDocumentBlob(token: string): Promise<Blob> {
+  const res = await fetch(publicReviewDocumentUrl(token));
+  if (!res.ok) await parseError(res);
+  return res.blob();
+}
+
 export async function reviewApprove(token: string) {
   return publicApiJson<{ status: string }>(`/api/review/${encodeURIComponent(token)}/approve`, "POST", {});
 }

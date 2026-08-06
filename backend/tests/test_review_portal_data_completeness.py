@@ -186,6 +186,13 @@ def test_public_risk_score_matches_internal_risk_engine_exactly(portal_db):
     assert scoring_items[0]["category"] == "temporal"
     assert scoring_items[0]["detail"] == internal_risk["findings"][0]["explanation"]
     assert scoring_items[0]["detail_ar"] == internal_risk["findings"][0]["explanation_ar"]
+    # Traceability: the finding's resolved clause source (already computed
+    # by risk_engine.serialize_risk()) must now reach the public payload —
+    # previously dropped by build_risk_summary(). See
+    # docs/review-portal-document-access-redesign.md.
+    assert scoring_items[0]["clause_ref"] == internal_risk["findings"][0]["source"]["clause_ref"]
+    assert scoring_items[0]["quote"] == internal_risk["findings"][0]["source"]["quote"]
+    assert scoring_items[0]["page"] == internal_risk["findings"][0]["source"]["page"]
 
 
 def test_public_risks_never_show_no_data_when_a_real_score_exists(portal_db):
@@ -225,6 +232,10 @@ def test_public_obligations_render_complete_available_fields(portal_db):
     assert obligation["title"] == "Pay monthly wage"
     assert obligation["beneficiary"] == "Client"
     assert obligation["trigger_event"] == "monthly_payroll"
+    # Traceability: the original clause text was already looked up here to
+    # resolve clause_ref/page but never actually returned. See
+    # docs/review-portal-document-access-redesign.md.
+    assert obligation["quote"] == "Either party must give sixty (60) days written notice"
 
 
 def test_public_timeline_includes_trigger_status_and_source(portal_db):
@@ -261,6 +272,34 @@ def test_public_payments_render_complete_available_fields(portal_db):
     assert milestone["amount_sar"] == 50000.0
     assert milestone["due_date"] is not None
     assert milestone["clause_ref"] == "3"
+
+
+def test_public_payload_exposes_document_url_and_business_summary(portal_db):
+    """The two missing-explainability findings from the Public Review
+    Portal audit: no way to open the contract itself, and the AI summary
+    was metadata-only. Both now surface in the payload without any new AI
+    generation — `business_summary` reuses the exact same
+    services/summary.py::serialize_summary() the internal Contract
+    Analysis page already renders; the metadata bullet list stays under
+    its own `ai_summary` key, unchanged. See
+    docs/review-portal-document-access-redesign.md."""
+    db, create_contract = portal_db
+    contract, _ = create_contract()
+    client = TestClient(app)
+    token = _send_and_get_token(client, contract.id)
+
+    portal = client.get(f"/api/review/{token}").json()
+
+    assert portal["document_url"] == f"/api/review/{token}/document"
+    assert portal["ai_summary"]  # metadata bullet list, kept as-is
+    assert portal["business_summary"]["status"] == "not_generated"
+    assert portal["business_summary"]["summary_ar"] is None
+    assert portal["business_summary"]["summary_en"] is None
+    # Document fetch itself (real PDF pass-through, DOCX-sourced fallback,
+    # expiry, and 404s) is covered end-to-end in
+    # test_review_document_access.py against contracts with real stored
+    # bytes — this fixture's file_url is a synthetic path never written to
+    # disk.
 
 
 def test_comparison_reason_is_not_linked_for_a_standalone_contract(portal_db):
@@ -305,6 +344,13 @@ def test_public_dossier_leaks_no_internal_only_fields(portal_db):
     portal = client.get(f"/api/review/{token}").json()
     import json
 
-    blob = json.dumps(portal)
+    # The review token itself is deliberately excluded from the forbidden
+    # list: `document_url` legitimately embeds it (the same token already
+    # sitting in the reviewer's browser address bar) so the portal can
+    # serve the contract document under the same token-gated auth boundary
+    # as every other public review route. That is not a new leak — see
+    # docs/review-portal-document-access-redesign.md.
+    assert portal["document_url"] == f"/api/review/{token}/document"
+    blob = json.dumps({k: v for k, v in portal.items() if k != "document_url"})
     for forbidden in ("playbook", "template_deviation", "token_hash", "token_nonce", token):
         assert forbidden not in blob

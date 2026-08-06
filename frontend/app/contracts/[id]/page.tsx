@@ -35,9 +35,20 @@ import { TabList, TabPanel, Tabs, TabTrigger } from "@/components/ui/Tabs";
 import Timeline from "@/components/ui/Timeline";
 import RiskScoreRing from "@/components/ui/RiskScoreRing";
 import StageBadge from "@/components/ui/StageBadge";
-import { api, apiJson, fetchActivity, fetchDeadlines, fetchVersions, getDemoToday, rebuildContractIntelligence } from "@/lib/api";
+import {
+  api,
+  apiErrorCode,
+  apiJson,
+  fetchActivity,
+  fetchContractFileBlob,
+  fetchDeadlines,
+  fetchVersions,
+  getDemoToday,
+  rebuildContractIntelligence,
+} from "@/lib/api";
 import { mapActivityEvents } from "@/lib/activity";
 import { invalidateContract, useCachedFetch } from "@/lib/cache";
+import { useToast } from "@/components/feedback/ToastProvider";
 import { useI18n, type TKey } from "@/lib/i18n";
 import type {
   ClauseSource,
@@ -47,7 +58,7 @@ import type {
   SourceTarget,
   DeadlineRow,
 } from "@/lib/types";
-import { cn, formatDate, formatNum, formatSAR } from "@/lib/utils";
+import { cn, formatDate, formatNum, formatSAR, triggerBlobDownload } from "@/lib/utils";
 
 type Tab =
   | "overview"
@@ -740,7 +751,9 @@ const ContractDocumentsTab = dynamic(
   () =>
     Promise.resolve(function ContractDocumentsTabInner({ contractId }: { contractId: string }) {
       const { t, lang } = useI18n();
+      const toast = useToast();
       const [versions, setVersions] = useState<import("@/lib/types").ContractVersionRow[]>([]);
+      const [docBusy, setDocBusy] = useState(false);
 
       useEffect(() => {
         fetchVersions(contractId)
@@ -748,17 +761,62 @@ const ContractDocumentsTab = dynamic(
           .catch(() => setVersions([]));
       }, [contractId]);
 
-      if (versions.length === 0) return <EmptyState title={t("common.empty")} />;
+      // Reuses the existing, already-working GET /api/contracts/{id}/file
+      // endpoint — confirmed unused by this tab (and the rest of the
+      // internal app) despite already serving the correct bytes/MIME
+      // type. No new backend endpoint needed. Serves the CURRENT document
+      // only (the endpoint has no per-version file access); the version
+      // list below stays label/date-only for that reason.
+      const downloadDocument = async () => {
+        setDocBusy(true);
+        try {
+          const blob = await fetchContractFileBlob(contractId);
+          triggerBlobDownload(blob, t("detail.tab.documents"));
+        } catch (caught) {
+          toast.error(apiErrorCode(caught, t("common.error")));
+        } finally {
+          setDocBusy(false);
+        }
+      };
+
+      const openDocument = async () => {
+        setDocBusy(true);
+        try {
+          const blob = await fetchContractFileBlob(contractId);
+          window.open(URL.createObjectURL(blob), "_blank");
+        } catch (caught) {
+          toast.error(apiErrorCode(caught, t("common.error")));
+        } finally {
+          setDocBusy(false);
+        }
+      };
 
       return (
-        <ul className="divide-y divide-neutral-100">
-          {versions.map((v) => (
-            <li key={v.id} className="flex items-center justify-between py-3">
-              <span className="font-medium">{v.version_label}</span>
-              <span className="text-sm text-neutral-500">{formatDate(v.created_at, lang)}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-100 p-3">
+            <span className="text-sm font-medium text-neutral-700">{t("detail.documents.current")}</span>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" loading={docBusy} onClick={downloadDocument}>
+                {t("detail.documents.download")}
+              </Button>
+              <Button variant="secondary" size="sm" loading={docBusy} onClick={openDocument}>
+                {t("detail.documents.open")}
+              </Button>
+            </div>
+          </div>
+          {versions.length === 0 ? (
+            <EmptyState title={t("common.empty")} />
+          ) : (
+            <ul className="divide-y divide-neutral-100">
+              {versions.map((v) => (
+                <li key={v.id} className="flex items-center justify-between py-3">
+                  <span className="font-medium">{v.version_label}</span>
+                  <span className="text-sm text-neutral-500">{formatDate(v.created_at, lang)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       );
     }),
   { ssr: false, loading: panelLoading }

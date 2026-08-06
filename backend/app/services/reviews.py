@@ -40,6 +40,7 @@ from .outbound_messages import (
 )
 from .payments import list_payment_milestones_for_contract, payments_summary
 from .risk_engine import serialize_risk
+from .summary import serialize_summary
 from . import versions as ver_svc
 
 DEFAULT_EXPIRY_DAYS = 14
@@ -361,6 +362,7 @@ def _serialize_obligations(contract_id, db: Session) -> list[dict]:
                 "status": o.status,
                 "clause_ref": clause.clause_ref if clause else None,
                 "page": clause.page if clause else None,
+                "quote": clause.quote if clause else None,
             }
         )
     return out
@@ -486,6 +488,7 @@ def build_risk_summary(
     engine_risk = serialize_risk(contract_id, db)
     items: list[dict] = []
     for f in engine_risk.get("findings") or []:
+        source = f.get("source") or {}
         items.append(
             {
                 "type": "finding",
@@ -496,6 +499,13 @@ def build_risk_summary(
                 "severity": _severity_from_points(f.get("points") or 0),
                 "link_tab": f.get("link_tab"),
                 "contributes_to_score": True,
+                # Same clause-source resolution risk_engine.serialize_risk()
+                # already computes internally — previously dropped here, so
+                # the public portal had no way to show the original clause
+                # text or page for a "finding"-type risk item at all.
+                "quote": source.get("quote"),
+                "clause_ref": source.get("clause_ref"),
+                "page": source.get("page"),
             }
         )
     for p in penalties:
@@ -586,9 +596,17 @@ def build_review_dossier(contract_id, db: Session) -> dict:
     notice_extr = db.query(Extraction).filter_by(contract_id=contract_id, field_name="notice_periods").first()
     notices = notice_extr.value_json if notice_extr and isinstance(notice_extr.value_json, list) else []
 
+    # The same rich, evidence-backed business summary the internal Contract
+    # Analysis page already generates and renders (purpose, obligations,
+    # risks, payment terms, key dates, each with citations) — the metadata
+    # bullet list above (`ai_summary`) is kept as-is under its own key per
+    # "Keep metadata separately"; this is the actual executive summary.
+    business_summary = serialize_summary(c, db)
+
     return {
         "contract": _contract_brief(c),
         "ai_summary": ai_summary,
+        "business_summary": business_summary,
         "notices": notices,
         "obligations": obligations,
         "timeline": {"deadlines": deadlines, "summary": timeline_summary},
@@ -965,6 +983,16 @@ def build_public_payload(req: ReviewRequest, db: Session) -> dict:
     serialized = serialize_review_request(req, db)
     return {
         **dossier,
+        # Same guaranteed-renderable document every other flow serves —
+        # real PDF upload if it is one, otherwise a generated PDF from the
+        # extracted text (see services/signature_pdf.py::original_bytes,
+        # already the single source of truth used by the signature flow).
+        # Token-gated: only reachable through this same review token.
+        # req.token itself is never populated for real requests (only the
+        # hash is persisted); public_token_for_request() reconstructs the
+        # same plaintext token deterministically from the stored nonce —
+        # the identical mechanism the review-link email already uses.
+        "document_url": f"/api/review/{public_token_for_request(req)}/document",
         "recipient_name": req.recipient_name,
         "status": req.status,
         "expires_at": serialized["expires_at"],

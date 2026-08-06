@@ -1,9 +1,7 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
-import FlowdownFindings from "@/components/FlowdownFindings";
-import FlowdownSummary from "@/components/FlowdownSummary";
 import { ReviewStatusBadge } from "@/components/SendForReviewDialog";
 import Logo from "@/components/Logo";
 import Badge from "@/components/ui/Badge";
@@ -15,6 +13,7 @@ import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import { useToast } from "@/components/feedback/ToastProvider";
 import {
   apiErrorCode,
+  fetchReviewDocumentBlob,
   fetchReviewPortal,
   reviewAddComment,
   reviewApprove,
@@ -22,10 +21,34 @@ import {
   reviewRequestChanges,
 } from "@/lib/api";
 import { useI18n, type TKey } from "@/lib/i18n";
-import type { ReviewPortalPayload } from "@/lib/types";
-import { cn, formatDate, formatSAR } from "@/lib/utils";
+import type { ReviewPortalPayload, SummarySections } from "@/lib/types";
+import { cn, formatDate, formatSAR, triggerBlobDownload } from "@/lib/utils";
 
-type Tab = "summary" | "risks" | "obligations" | "timeline" | "payments" | "comparison";
+type Tab = "summary" | "risks" | "obligations" | "timeline" | "payments";
+
+// Read-only rendering of the same rich summary structure AiSummaryPanel.tsx
+// already renders internally — the public reviewer never sees generate/
+// regenerate controls, but sees the exact same purpose/obligations/risks/
+// payment/deadline sections with citations.
+const SECTION_KEYS = [
+  "purpose",
+  "key_obligations",
+  "notable_risks",
+  "financial_terms",
+  "term_and_key_dates",
+  "termination_renewal",
+  "next_steps",
+] as const;
+
+const SECTION_I18N: Record<(typeof SECTION_KEYS)[number], TKey> = {
+  purpose: "summary.section.purpose",
+  key_obligations: "summary.section.obligations",
+  notable_risks: "summary.section.risks",
+  financial_terms: "summary.section.financial",
+  term_and_key_dates: "summary.section.term",
+  termination_renewal: "summary.section.termination",
+  next_steps: "summary.section.nextSteps",
+};
 
 function severityTone(severity: string): "danger" | "orange" | "warning" | "neutral" {
   if (severity === "critical") return "danger";
@@ -49,14 +72,105 @@ function Bidi({ children, className }: { children: React.ReactNode; className?: 
   );
 }
 
-function SourceRef({ clauseRef, page, t }: { clauseRef?: string | null; page?: number | null; t: (k: TKey) => string }) {
-  if (!clauseRef && !page) return null;
+// Every extracted item's "where did this come from?" answer: the original
+// clause quote, its reference/page, and a jump action into the embedded
+// document viewer above — the traceability the whole portal audit asked
+// for, applied uniformly across risks/obligations/timeline/payments.
+function SourceRef({
+  clauseRef,
+  page,
+  quote,
+  t,
+  onJump,
+}: {
+  clauseRef?: string | null;
+  page?: number | null;
+  quote?: string | null;
+  t: (k: TKey) => string;
+  onJump?: (page: number | null | undefined) => void;
+}) {
+  if (!clauseRef && !page && !quote) return null;
   return (
-    <p className="mt-1 text-xs text-gray-400">
-      {t("review.portal.source")}: {clauseRef ? `${t("detail.clause")} ${clauseRef}` : null}
-      {clauseRef && page ? " · " : null}
-      {page ? `${t("detail.viewer.page")} ${page}` : null}
-    </p>
+    <div className="mt-2 space-y-1 text-xs">
+      <p className="text-gray-400">
+        {t("review.portal.source")}: {clauseRef ? `${t("detail.clause")} ${clauseRef}` : null}
+        {clauseRef && page ? " · " : null}
+        {page ? `${t("detail.viewer.page")} ${page}` : null}
+        {onJump && (clauseRef || page) && (
+          <button
+            type="button"
+            className="ms-2 font-medium text-brand-600 underline hover:text-brand-700"
+            onClick={() => onJump(page)}
+          >
+            {t("evidence.jumpToClause")}
+          </button>
+        )}
+      </p>
+      {quote && (
+        <Bidi className="block rounded border border-gray-200 bg-gray-50 p-2 italic text-gray-600">
+          &ldquo;{quote}&rdquo;
+        </Bidi>
+      )}
+    </div>
+  );
+}
+
+function BusinessSummary({
+  sections,
+  lang,
+  t,
+  onJump,
+}: {
+  sections: SummarySections;
+  lang: "ar" | "en";
+  t: (k: TKey) => string;
+  onJump: (page: number | null | undefined) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      {SECTION_KEYS.map((key) => {
+        const sec = sections[key];
+        if (!sec) return null;
+        return (
+          <section key={key}>
+            <h3 className="mb-1.5 text-sm font-semibold text-gray-800">{t(SECTION_I18N[key])}</h3>
+            {sec.status === "not_stated" ? (
+              <p className="text-sm text-gray-500">{t("summary.notStated")}</p>
+            ) : (
+              <>
+                {sec.overview && (
+                  <p dir="auto" className="mb-1.5 text-sm leading-relaxed text-gray-800">
+                    {sec.overview}
+                  </p>
+                )}
+                <ul className="list-disc space-y-1.5 ps-5 text-sm text-gray-800">
+                  {sec.items.map((item, i) => (
+                    <li key={i} dir="auto">
+                      {item.text}
+                      {item.citations?.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {item.citations.map((c, j) => (
+                            <button
+                              key={j}
+                              type="button"
+                              className="rounded bg-brand-50 px-1.5 py-0.5 text-xs text-brand-700 hover:bg-brand-100"
+                              onClick={() => onJump(c.page)}
+                            >
+                              {c.clause_ref ? `${t("detail.clause")} ${c.clause_ref} · ` : ""}
+                              {t("summary.citation")} p.{c.page}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -71,12 +185,24 @@ export default function ReviewPortalPage() {
   const [tab, setTab] = useState<Tab>("summary");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [docBusy, setDocBusy] = useState(false);
   const [clauseRef, setClauseRef] = useState("");
   const [clauseComment, setClauseComment] = useState("");
   const [overallComment, setOverallComment] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [showReject, setShowReject] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
+  const [docPage, setDocPage] = useState<number | null>(null);
+  const docRef = useRef<HTMLDivElement | null>(null);
+  // The iframe must never be pointed straight at the API URL: if that
+  // request ever fails (expired mid-session, storage file missing,
+  // wrong contract) the browser renders the raw JSON error body inline,
+  // which is exactly the reported bug. Instead the PDF is fetched and
+  // verified as a blob first, and the iframe only ever gets a src once
+  // that succeeded — any failure shows an honest "Document unavailable"
+  // state instead.
+  const [docState, setDocState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [docBlobUrl, setDocBlobUrl] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -87,6 +213,31 @@ export default function ReviewPortalPage() {
 
   useEffect(load, [load]);
 
+  useEffect(() => {
+    if (!data) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setDocState("loading");
+    fetchReviewDocumentBlob(token)
+      .then((blob) => {
+        if (cancelled) return;
+        if (blob.type && blob.type !== "application/pdf") {
+          setDocState("unavailable");
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setDocBlobUrl(objectUrl);
+        setDocState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setDocState("unavailable");
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [data, token]);
+
   const readOnly = data?.read_only ?? false;
   const responded = data?.status === "approved" || data?.status === "rejected" || data?.status === "changes_requested";
 
@@ -96,8 +247,36 @@ export default function ReviewPortalPage() {
     { key: "obligations", label: "review.portal.tab.obligations" },
     { key: "timeline", label: "review.portal.tab.timeline" },
     { key: "payments", label: "review.portal.tab.payments" },
-    { key: "comparison", label: "review.portal.tab.comparison" },
   ];
+
+  const jumpToDocument = useCallback((page: number | null | undefined) => {
+    if (page) setDocPage(page);
+    docRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const downloadDocument = async () => {
+    setDocBusy(true);
+    try {
+      const blob = await fetchReviewDocumentBlob(token);
+      triggerBlobDownload(blob, `${data?.contract.title || "contract"}.pdf`);
+    } catch (caught) {
+      toastError(apiErrorCode(caught, t("common.error")));
+    } finally {
+      setDocBusy(false);
+    }
+  };
+
+  const openDocument = async () => {
+    setDocBusy(true);
+    try {
+      const blob = await fetchReviewDocumentBlob(token);
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (caught) {
+      toastError(apiErrorCode(caught, t("common.error")));
+    } finally {
+      setDocBusy(false);
+    }
+  };
 
   const onApprove = () => {
     confirm({
@@ -185,6 +364,11 @@ export default function ReviewPortalPage() {
 
   if (!data) return <p className="p-8 text-center text-gray-400">{t("common.loading")}</p>;
 
+  const summaryLang: "ar" | "en" = lang === "ar" ? "ar" : "en";
+  const businessSections: SummarySections | null =
+    summaryLang === "ar" ? data.business_summary?.summary_ar ?? null : data.business_summary?.summary_en ?? null;
+  const docSrc = docBlobUrl && docPage ? `${docBlobUrl}#page=${docPage}` : docBlobUrl;
+
   return (
     <div className="relative min-h-screen bg-[#F8FAFC]">
       {/* Matches the ambient wash of the authenticated shell and the signer
@@ -227,10 +411,62 @@ export default function ReviewPortalPage() {
             </div>
           )}
 
+          {/* A contract review portal must always expose the contract itself —
+              not just extracted data. Same guaranteed-renderable document the
+              signature flow already uses, token-gated the same way as every
+              other public review route. See
+              docs/review-portal-document-access-redesign.md. */}
+          <div ref={docRef}>
           <Card>
             <CardBody>
-              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">{t("review.portal.aiSummary")}</h2>
-              <pre dir="auto" className="whitespace-pre-wrap font-sans text-sm text-gray-800">{data.ai_summary}</pre>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+                  {t("review.portal.document.title")}
+                </h2>
+                {docState === "ready" && (
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" loading={docBusy} onClick={downloadDocument}>
+                      {t("review.portal.document.download")}
+                    </Button>
+                    <Button variant="secondary" size="sm" loading={docBusy} onClick={openDocument}>
+                      {t("review.portal.document.open")}
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {docState === "loading" && (
+                <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-gray-200 bg-gray-50">
+                  <p className="text-sm text-gray-400">{t("common.loading")}</p>
+                </div>
+              )}
+              {docState === "unavailable" && (
+                <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-1 rounded-lg border border-gray-200 bg-gray-50 text-center">
+                  <p className="text-sm font-medium text-gray-600">{t("review.portal.document.unavailable")}</p>
+                  <p className="text-xs text-gray-400">{t("review.portal.document.unavailableHint")}</p>
+                </div>
+              )}
+              {docState === "ready" && docSrc && (
+                <iframe
+                  key={docSrc}
+                  src={docSrc}
+                  title={data.contract.title ?? t("review.portal.document.title")}
+                  className="h-[70vh] w-full rounded-lg border border-gray-200"
+                />
+              )}
+            </CardBody>
+          </Card>
+          </div>
+
+          <Card>
+            <CardBody>
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
+                {t("review.portal.summary.business")}
+              </h2>
+              {data.business_summary?.status === "ready" && businessSections ? (
+                <BusinessSummary sections={businessSections} lang={summaryLang} t={t} onJump={jumpToDocument} />
+              ) : (
+                <p className="text-sm text-gray-500">{t("review.portal.summary.notAvailable")}</p>
+              )}
             </CardBody>
           </Card>
 
@@ -253,6 +489,11 @@ export default function ReviewPortalPage() {
         <CardBody>
           {tab === "summary" && (
             <dl className="grid gap-3 sm:grid-cols-2 text-sm">
+              <div className="sm:col-span-2">
+                <dt className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                  {t("review.portal.summary.metadata")}
+                </dt>
+              </div>
               <div>
                 <dt className="text-gray-500">{t("detail.value")}</dt>
                 <dd className="font-semibold">{formatSAR(data.contract.value_sar, lang)}</dd>
@@ -298,19 +539,14 @@ export default function ReviewPortalPage() {
                       <Bidi className="block text-gray-600">
                         {lang === "ar" ? r.detail_ar || r.detail : r.detail || r.detail_ar}
                       </Bidi>
-                      {r.type === "penalty" && (r.rate || r.cap || r.quote) && (
-                        <div className="mt-1 space-y-1 text-xs text-gray-500">
-                          {(r.rate || r.cap) && (
-                            <p>
-                              {r.rate && <span>{t("obligation.penalty")}: {r.rate}</span>}
-                              {r.rate && r.cap && " · "}
-                              {r.cap && <span>{t("review.portal.penaltyCap")}: {r.cap}</span>}
-                            </p>
-                          )}
-                          {r.quote && <Bidi className="block italic">&ldquo;{r.quote}&rdquo;</Bidi>}
-                        </div>
+                      {r.type === "penalty" && (r.rate || r.cap) && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          {r.rate && <span>{t("obligation.penalty")}: {r.rate}</span>}
+                          {r.rate && r.cap && " · "}
+                          {r.cap && <span>{t("review.portal.penaltyCap")}: {r.cap}</span>}
+                        </p>
                       )}
-                      <SourceRef clauseRef={r.clause_ref} page={r.page} t={t} />
+                      <SourceRef clauseRef={r.clause_ref} page={r.page} quote={r.quote} onJump={jumpToDocument} t={t} />
                     </li>
                   ))}
                 </ul>
@@ -357,7 +593,7 @@ export default function ReviewPortalPage() {
                           </div>
                         )}
                       </dl>
-                      <SourceRef clauseRef={o.clause_ref} page={o.page} t={t} />
+                      <SourceRef clauseRef={o.clause_ref} page={o.page} quote={o.quote} onJump={jumpToDocument} t={t} />
                     </li>
                   ))}
                 </ul>
@@ -386,6 +622,11 @@ export default function ReviewPortalPage() {
                         )}
                         {d.notice_period_days ? ` · ${t("review.portal.noticeDays")}: ${d.notice_period_days}` : ""}
                       </p>
+                      {d.responsible_party && (
+                        <p className="text-xs text-gray-500">
+                          {t("obligation.party")}: {d.responsible_party}
+                        </p>
+                      )}
                       {d.source_trigger_date && (
                         <p className="text-xs text-gray-500">
                           {t("detail.noticeReference")}: <DualDate date={d.source_trigger_date} />
@@ -398,7 +639,7 @@ export default function ReviewPortalPage() {
                             : d.calculation_explanation || d.calculation_explanation_ar}
                         </Bidi>
                       )}
-                      <SourceRef clauseRef={d.clause_ref} page={d.page} t={t} />
+                      <SourceRef clauseRef={d.clause_ref} page={d.page} quote={d.quote} onJump={jumpToDocument} t={t} />
                     </li>
                   ))}
                 </ul>
@@ -423,26 +664,13 @@ export default function ReviewPortalPage() {
                       <p className="text-xs text-gray-500">
                         {t("obligation.due")}: {m.due_date ? <DualDate date={m.due_date} /> : t("review.portal.noDateYet")}
                       </p>
-                      <SourceRef clauseRef={m.clause_ref} page={m.page} t={t} />
+                      <SourceRef clauseRef={m.clause_ref} page={m.page} quote={m.quote} onJump={jumpToDocument} t={t} />
                     </li>
                   ))}
                 </ul>
               )}
             </div>
           )}
-          {tab === "comparison" &&
-            (data.comparison ? (
-              <div className="space-y-4">
-                <FlowdownSummary summary={data.comparison.summary} />
-                <FlowdownFindings findings={data.comparison.findings} onViewMain={() => {}} onViewSub={() => {}} />
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500">
-                {data.comparison_unavailable_reason === "not_yet_compared"
-                  ? t("review.portal.comparisonNotYetCompared")
-                  : t("review.portal.comparisonNotLinked")}
-              </p>
-            ))}
         </CardBody>
       </Card>
 

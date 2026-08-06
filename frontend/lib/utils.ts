@@ -7,6 +7,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/** Saves a fetched blob to disk under a real filename via a throwaway
+ * `<a download>` link — `window.open(URL.createObjectURL(blob))` alone
+ * opens a document but never lets the browser save it with a sensible
+ * name. */
+export function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /**
  * Locale numeral system.
  *

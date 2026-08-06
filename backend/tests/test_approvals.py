@@ -172,6 +172,8 @@ def test_public_review_payload_no_approval_keys():
     req = SimpleNamespace(
         id=uuid.uuid4(),
         contract_id=uuid.uuid4(),
+        token="tok-123",
+        token_nonce=None,
         recipient_name="C",
         status="opened",
         expires_at=None,

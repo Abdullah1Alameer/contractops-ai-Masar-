@@ -28,10 +28,13 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ token: "demo-token" }),
 }));
 
+const fetchReviewDocumentBlob = vi.fn();
+
 vi.mock("@/lib/api", () => ({
   apiErrorCode: (error: unknown, fallback: string) =>
     error instanceof FakeApiError ? error.code : fallback,
   fetchReviewPortal: (...args: unknown[]) => fetchReviewPortal(...args),
+  fetchReviewDocumentBlob: (...args: unknown[]) => fetchReviewDocumentBlob(...args),
   reviewApprove: (...args: unknown[]) => reviewApprove(...args),
   reviewReject: (...args: unknown[]) => reviewReject(...args),
   reviewRequestChanges: (...args: unknown[]) => reviewRequestChanges(...args),
@@ -70,6 +73,17 @@ function basePayload(overrides: Partial<ReviewPortalPayload> = {}): ReviewPortal
       contract_category: "MSA",
     },
     ai_summary: "Contract summary text",
+    business_summary: {
+      status: "not_generated",
+      summary_ar: null,
+      summary_en: null,
+      error_code: null,
+      error_detail: null,
+      generated_at: null,
+      model: null,
+      is_stale: false,
+    },
+    document_url: "/api/review/demo-token/document",
     notices: [],
     obligations: [],
     timeline: { deadlines: [], summary: { total: 0, critical: 0, within_14_days: 0, missed_or_time_barred: 0, needs_review: 0 } },
@@ -111,6 +125,11 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fetchReviewDocumentBlob.mockResolvedValue(new Blob(["%PDF-1.7 fake"], { type: "application/pdf" }));
+  if (!URL.createObjectURL) (URL as unknown as { createObjectURL: () => string }).createObjectURL = () => "";
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock-document");
+  if (!URL.revokeObjectURL) (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {};
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
 });
 
 describe("ReviewPortalPage — loading and error states", () => {
@@ -230,6 +249,7 @@ describe("ReviewPortalPage — Obligations tab", () => {
             status: "pending",
             clause_ref: "2",
             page: 7,
+            quote: "Provider shall pay wages monthly in arrears.",
           },
         ],
       })
@@ -363,23 +383,83 @@ describe("ReviewPortalPage — Payments tab", () => {
   });
 });
 
-describe("ReviewPortalPage — Comparison tab", () => {
-  it("explains that comparison requires a linked contract, not that another version is needed", async () => {
-    fetchReviewPortal.mockResolvedValue(basePayload({ comparison: null, comparison_unavailable_reason: "not_linked" }));
+describe("ReviewPortalPage — document viewer", () => {
+  it("fetches and verifies the document as a blob before rendering it — never points the iframe straight at the API URL", async () => {
+    fetchReviewPortal.mockResolvedValue(basePayload());
     renderPage();
-    await clickTab("المقارنة");
 
-    expect(
-      screen.getByText("لا تتوفر مقارنة — تتطلب هذه الميزة ربط العقد بعقد رئيسي أو عقد من الباطن. هذا غير متعلق بعدد إصدارات العقد.")
-    ).toBeTruthy();
+    await screen.findByText("Synthetic Portal Contract");
+    await waitFor(() => expect(fetchReviewDocumentBlob).toHaveBeenCalledWith("demo-token"));
+    const frame = await screen.findByTitle("Synthetic Portal Contract");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame.getAttribute("src")).toBe("blob:mock-document");
+    expect(screen.getByText("تنزيل PDF")).toBeTruthy();
+    expect(screen.getByText("فتح في تبويب جديد")).toBeTruthy();
   });
 
-  it("distinguishes 'linked but not yet compared' from 'not linked at all'", async () => {
-    fetchReviewPortal.mockResolvedValue(basePayload({ comparison: null, comparison_unavailable_reason: "not_yet_compared" }));
+  it("shows an honest 'Document unavailable' state instead of raw JSON when the document fetch fails", async () => {
+    fetchReviewPortal.mockResolvedValue(basePayload());
+    fetchReviewDocumentBlob.mockRejectedValue(new FakeApiError(404, "not_found"));
     renderPage();
-    await clickTab("المقارنة");
 
-    expect(await screen.findByText("هذا العقد مرتبط بعقد آخر، لكن لم يتم إنشاء تحليل مقارنة بعد.")).toBeTruthy();
+    expect(await screen.findByText("تعذّر عرض مستند العقد")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    // Download/open actions must not be offered for a document that isn't there.
+    expect(screen.queryByText("تنزيل PDF")).toBeNull();
+    expect(screen.queryByText("فتح في تبويب جديد")).toBeNull();
+  });
+
+  it("shows an honest 'Document unavailable' state when the response isn't actually a PDF", async () => {
+    fetchReviewPortal.mockResolvedValue(basePayload());
+    fetchReviewDocumentBlob.mockResolvedValue(new Blob(['{"detail":"Not Found"}'], { type: "application/json" }));
+    renderPage();
+
+    expect(await screen.findByText("تعذّر عرض مستند العقد")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("never renders a Comparison tab — single-contract review only", async () => {
+    fetchReviewPortal.mockResolvedValue(basePayload());
+    renderPage();
+
+    await screen.findByText("ملخص");
+    expect(screen.queryByText("المقارنة")).toBeNull();
+  });
+});
+
+describe("ReviewPortalPage — executive summary", () => {
+  it("shows an honest not-yet-available state instead of a fabricated summary", async () => {
+    fetchReviewPortal.mockResolvedValue(basePayload());
+    renderPage();
+
+    expect(await screen.findByText("الملخص التنفيذي غير متاح بعد لهذا العقد.")).toBeTruthy();
+  });
+
+  it("renders the structured business summary sections with citations when ready", async () => {
+    fetchReviewPortal.mockResolvedValue(
+      basePayload({
+        business_summary: {
+          status: "ready",
+          summary_ar: {
+            purpose: {
+              status: "stated",
+              overview: "اتفاقية لتقديم خدمات استشارية.",
+              items: [{ text: "الغرض الرئيسي هو تقديم الاستشارات.", citations: [{ clause_ref: "1", page: 1, quote: "..." }] }],
+            },
+          },
+          summary_en: null,
+          error_code: null,
+          error_detail: null,
+          generated_at: "2026-08-01T00:00:00+00:00",
+          model: "demo",
+          is_stale: false,
+        },
+      })
+    );
+    renderPage();
+
+    expect(await screen.findByText("اتفاقية لتقديم خدمات استشارية.")).toBeTruthy();
+    expect(screen.getByText(/البند 1/)).toBeTruthy();
   });
 });
 

@@ -1,20 +1,24 @@
 """Public review portal — token auth only, no bearer token."""
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..models import Contract
 from ..services.lifecycle import LifecycleError
 from ..services.negotiation import NegotiationError
 from ..services.reviews import (
     ReviewError,
     add_comment,
     build_public_payload,
+    expire_if_needed,
     get_request_by_token,
     hash_token,
     record_decision,
     serialize_review_request,
 )
+from ..services.signature_pdf import original_bytes
 from ..services.rate_limit import check_rate_limit
 
 router = APIRouter(tags=["review-public"])
@@ -80,6 +84,28 @@ def get_review(token: str, request: Request, db: Session = Depends(get_db)):
         return build_public_payload(req, db)
     except (ReviewError, LifecycleError, NegotiationError) as error:
         _review_http_error(error)
+
+
+@router.get("/review/{token}/document")
+def get_review_document(token: str, request: Request, db: Session = Depends(get_db)):
+    """The contract itself, as a guaranteed-renderable PDF — the same
+    single source of truth (services/signature_pdf.py::original_bytes)
+    already used by the signature flow: the real uploaded file when it is
+    actually a PDF, otherwise a PDF generated from the extracted text.
+    Gated by the same token validity/expiry check as every other route
+    here — this is the actual (and only) authorization boundary for the
+    public review portal; see docs/review-portal-document-access-redesign.md."""
+    _rate(request, token)
+    req = _load(token, db)
+    try:
+        expire_if_needed(req, db)
+    except (ReviewError, LifecycleError, NegotiationError) as error:
+        _review_http_error(error)
+    contract = db.get(Contract, req.contract_id)
+    if contract is None:
+        raise HTTPException(404, detail={"error": "not_found"})
+    data = original_bytes(contract)
+    return Response(content=data, media_type="application/pdf")
 
 
 @router.post("/review/{token}/approve")

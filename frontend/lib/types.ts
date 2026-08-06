@@ -492,6 +492,7 @@ export interface ReviewPortalObligationRow {
   status: string;
   clause_ref: string | null;
   page: number | null;
+  quote: string | null;
 }
 
 export interface ReviewPortalRiskItem {
@@ -503,7 +504,8 @@ export interface ReviewPortalRiskItem {
   severity: string;
   link_tab: string | null;
   contributes_to_score: boolean;
-  // penalty-only fields
+  // penalty/finding source fields (finding items now carry the same
+  // resolved clause source risk_engine.serialize_risk() already computes)
   cap?: string | null;
   rate?: string | null;
   quote?: string | null;
@@ -533,6 +535,8 @@ export interface ReviewPortalPayload {
     contract_category: string | null;
   };
   ai_summary: string;
+  business_summary: ContractSummaryPayload;
+  document_url: string;
   notices: NoticePeriodItem[];
   obligations: ReviewPortalObligationRow[];
   timeline: { deadlines: DeadlineRow[]; summary: DeadlineSummary };

@@ -16,11 +16,11 @@ import DataTable, { type DataTableColumn } from "@/components/ui/DataTable";
 import EmptyState from "@/components/ui/EmptyState";
 import { SkeletonTable } from "@/components/ui/Skeleton";
 import { useCachedFetch, invalidateByPrefix } from "@/lib/cache";
-import { api, deleteContract } from "@/lib/api";
+import { api, apiErrorCode, deleteContract, fetchContractFileBlob } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { filterContractsByPipelineBucket } from "@/lib/pipeline";
 import type { ContractListItem } from "@/lib/types";
-import { formatDate, formatNum, formatSAR } from "@/lib/utils";
+import { formatDate, formatNum, formatSAR, triggerBlobDownload } from "@/lib/utils";
 
 const PAGE_SIZE = 25;
 
@@ -115,6 +115,28 @@ function ContractsPageContent() {
         }
       },
     });
+  };
+
+  // Reuses the existing, already-working GET /api/contracts/{id}/file
+  // endpoint — it was never wired into any list/detail UI despite serving
+  // the correct MIME type and Content-Disposition already. No new backend
+  // endpoint needed; see docs/review-portal-document-access-redesign.md.
+  const onDownload = async (c: ContractListItem) => {
+    try {
+      const blob = await fetchContractFileBlob(c.id);
+      triggerBlobDownload(blob, c.title || "contract");
+    } catch (caught) {
+      toast.error(apiErrorCode(caught, t("common.error")));
+    }
+  };
+
+  const onOpen = async (c: ContractListItem) => {
+    try {
+      const blob = await fetchContractFileBlob(c.id);
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (caught) {
+      toast.error(apiErrorCode(caught, t("common.error")));
+    }
   };
 
   const bulkExport = () => {
@@ -223,6 +245,8 @@ function ContractsPageContent() {
         <ActionMenu
           items={[
             { id: "open", label: t("versions.open"), onSelect: () => router.push(`/contracts/${c.id}`) },
+            { id: "download-doc", label: t("list.downloadDocument"), onSelect: () => onDownload(c) },
+            { id: "open-doc", label: t("list.openDocument"), onSelect: () => onOpen(c) },
             {
               id: "del",
               label: t("list.delete"),
