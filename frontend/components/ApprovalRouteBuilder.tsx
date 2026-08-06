@@ -8,6 +8,8 @@ import { Card, CardBody } from "@/components/ui/Card";
 import {
   apiErrorCode,
   configureApprovalRoute,
+  DEMO_ROLE_EVENT,
+  DEMO_ROLE_STORAGE,
   fetchSavedRoute,
   fetchSavedRoutes,
 } from "@/lib/api";
@@ -21,6 +23,28 @@ import { cn } from "@/lib/utils";
 // what order, which steps are mandatory, an optional label, and whether
 // to save it for reuse. See docs/configurable-approval-routes-report.md.
 const AVAILABLE_ROLES = ["business_owner", "legal", "finance", "executive", "sales", "manager"] as const;
+
+// Must mirror the backend's ROUTE_ADMIN_ROLES exactly
+// (app/services/approval_routes.py) — configuring/saving a route is
+// gated to legal/executive there. Checking it here too means an
+// unauthorized attempt is prevented before the request is ever sent,
+// instead of surfacing the backend's raw approval_route_role_required
+// error code. See docs/approval-route-role-error-audit.md.
+const ROUTE_ADMIN_ROLES = new Set(["legal", "executive"]);
+
+// Every backend error this endpoint can actually return
+// (app/services/approval_routes.py::configure_contract_route), mapped to
+// a localized message — a raw backend error code must never reach the
+// user untranslated. Unmapped/unexpected codes (network errors, 404s,
+// etc.) fall back to the generic error message.
+const ERROR_KEYS: Record<string, TKey> = {
+  approval_route_role_required: "approval.routeBuilder.roleRequiredTitle",
+  approval_steps_required: "approval.routeBuilder.emptyRouteError",
+  invalid_approver: "approval.routeBuilder.error.invalidApprover",
+  duplicate_approver: "approval.routeBuilder.duplicateError",
+  invalid_stage_transition: "approval.routeBuilder.error.invalidStage",
+  approval_route_locked: "approval.routeBuilder.error.routeLocked",
+};
 
 type DraftStep = { role: string; approver_name: string; required: boolean };
 
@@ -51,11 +75,21 @@ export default function ApprovalRouteBuilder({
   const [saveAsRouteName, setSaveAsRouteName] = useState("");
   const [sourceRouteId, setSourceRouteId] = useState<string | null>(initialDraft?.source_route_id ?? null);
   const [busy, setBusy] = useState(false);
+  const [role, setRole] = useState("legal");
+  const canConfigureRoute = ROUTE_ADMIN_ROLES.has(role);
 
   useEffect(() => {
     fetchSavedRoutes()
       .then((r) => setSavedRoutes(r.routes))
       .catch(() => setSavedRoutes([]));
+  }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(DEMO_ROLE_STORAGE);
+    if (saved) setRole(saved);
+    const onRoleChange = () => setRole(localStorage.getItem(DEMO_ROLE_STORAGE) || "legal");
+    window.addEventListener(DEMO_ROLE_EVENT, onRoleChange);
+    return () => window.removeEventListener(DEMO_ROLE_EVENT, onRoleChange);
   }, []);
 
   const addApprover = () => setSteps((s) => [...s, { role: "legal", approver_name: "", required: true }]);
@@ -81,8 +115,16 @@ export default function ApprovalRouteBuilder({
       setSteps(detail.steps.map((s) => ({ role: s.role, approver_name: s.approver_name ?? "", required: s.required })));
       setRouteName(detail.name);
     } catch (error) {
-      toast.error(apiErrorCode(error, t("common.error")));
+      showApiError(error);
     }
+  };
+
+  // A raw backend error code (e.g. "approval_route_role_required") must
+  // never reach the user untranslated — map it through ERROR_KEYS first.
+  // See docs/approval-route-role-error-audit.md.
+  const showApiError = (error: unknown) => {
+    const code = apiErrorCode(error, "unknown");
+    toast.error(t(ERROR_KEYS[code] ?? "common.error"));
   };
 
   const duplicateKey = (a: DraftStep, b: DraftStep) =>
@@ -90,6 +132,14 @@ export default function ApprovalRouteBuilder({
   const hasDuplicates = steps.some((s, i) => steps.some((other, j) => j !== i && duplicateKey(s, other)));
 
   const start = async () => {
+    // Prevent the invalid submission entirely rather than let the backend
+    // reject it — this is the same ROUTE_ADMIN_ROLES check the backend
+    // enforces (app/services/approval_routes.py::_require_route_admin),
+    // applied client-side first.
+    if (!canConfigureRoute) {
+      toast.error(t("approval.routeBuilder.roleRequiredTitle"));
+      return;
+    }
     if (steps.length === 0) {
       toast.error(t("approval.routeBuilder.emptyRouteError"));
       return;
@@ -120,7 +170,7 @@ export default function ApprovalRouteBuilder({
       await configureApprovalRoute(contractId, body);
       onConfigured();
     } catch (error) {
-      toast.error(apiErrorCode(error, t("common.error")));
+      showApiError(error);
     } finally {
       setBusy(false);
     }
@@ -137,6 +187,15 @@ export default function ApprovalRouteBuilder({
         <p className="rounded-lg border border-info-200/70 bg-info-50/60 p-2 text-xs text-info-900">
           {t("approval.routeBuilder.sequentialNote")}
         </p>
+
+        {!canConfigureRoute && (
+          <div role="alert" className="rounded-lg border border-warning-300 bg-warning-50 p-3 text-sm text-warning-900">
+            <p className="font-semibold">{t("approval.routeBuilder.roleRequiredTitle")}</p>
+            <p className="mt-1 text-xs">
+              {t("approval.routeBuilder.roleRequiredBody").replace("{role}", roleLabel(t, role))}
+            </p>
+          </div>
+        )}
 
         {savedRoutes.length > 0 && (
           <div className="space-y-2 rounded-lg border p-3">
@@ -268,7 +327,7 @@ export default function ApprovalRouteBuilder({
           )}
         </div>
 
-        <Button variant="primary" loading={busy} disabled={steps.length === 0} onClick={start}>
+        <Button variant="primary" loading={busy} disabled={steps.length === 0 || !canConfigureRoute} onClick={start}>
           {t("approval.routeBuilder.confirmRoute")}
         </Button>
       </CardBody>

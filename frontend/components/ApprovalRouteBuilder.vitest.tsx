@@ -10,8 +10,18 @@ const fetchSavedRoutes = vi.fn();
 const fetchSavedRoute = vi.fn();
 const configureApprovalRoute = vi.fn();
 
+class FakeApiError extends Error {
+  code: string;
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+  }
+}
+
 vi.mock("@/lib/api", () => ({
-  apiErrorCode: (_error: unknown, fallback: string) => fallback,
+  apiErrorCode: (error: unknown, fallback: string) => (error instanceof FakeApiError ? error.code : fallback),
+  DEMO_ROLE_STORAGE: "demoRole",
+  DEMO_ROLE_EVENT: "demo-role-changed",
   fetchSavedRoutes: (...args: unknown[]) => fetchSavedRoutes(...args),
   fetchSavedRoute: (...args: unknown[]) => fetchSavedRoute(...args),
   configureApprovalRoute: (...args: unknown[]) => configureApprovalRoute(...args),
@@ -57,6 +67,7 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   fetchSavedRoutes.mockResolvedValue({ routes: [], available_roles: ["business_owner", "legal", "finance", "executive", "sales", "manager"] });
 });
 
@@ -163,5 +174,98 @@ describe("ApprovalRouteBuilder", () => {
   it("shows the sequential-only disclosure honestly, without implying parallel support", async () => {
     renderBuilder();
     expect(await screen.findByText(/الموافقات المتوازية غير مدعومة بعد/)).toBeTruthy();
+  });
+});
+
+// Root cause: approval_route_role_required is a pure authorization gate
+// (app/services/approval_routes.py::_require_route_admin — the acting
+// X-Demo-Role must be "legal" or "executive") on the PUT
+// /contracts/{id}/approval-route call itself; it has nothing to do with
+// the request body's shape (no role/approver_name/email/required field
+// was ever missing or malformed). The frontend previously had no
+// awareness of the acting role at all, and rendered the raw backend
+// error code verbatim via toast.error(apiErrorCode(...)) with no i18n
+// mapping. See docs/approval-route-role-error-audit.md.
+describe("ApprovalRouteBuilder — role gate for approval_route_role_required", () => {
+  it("prevents submission and explains why when the acting demo role cannot configure routes", async () => {
+    localStorage.setItem("demoRole", "finance");
+    renderBuilder();
+
+    expect(await screen.findByText("لا تملك صلاحية تحديد مسار الموافقات")).toBeTruthy();
+    const saveButton = screen.getByText("حفظ مسار الموافقات").closest("button") as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.click(saveButton);
+    expect(configureApprovalRoute).not.toHaveBeenCalled();
+  });
+
+  it("allows submission for the legal role", async () => {
+    localStorage.setItem("demoRole", "legal");
+    configureApprovalRoute.mockResolvedValue({ id: "cr1", status: "draft", steps: [] });
+    renderBuilder();
+
+    expect(screen.queryByText("لا تملك صلاحية تحديد مسار الموافقات")).toBeNull();
+    fireEvent.click(screen.getByText("حفظ مسار الموافقات"));
+
+    await waitFor(() => expect(configureApprovalRoute).toHaveBeenCalled());
+  });
+
+  it("allows submission for the executive role", async () => {
+    localStorage.setItem("demoRole", "executive");
+    configureApprovalRoute.mockResolvedValue({ id: "cr1", status: "draft", steps: [] });
+    renderBuilder();
+
+    expect(screen.queryByText("لا تملك صلاحية تحديد مسار الموافقات")).toBeNull();
+    fireEvent.click(screen.getByText("حفظ مسار الموافقات"));
+
+    await waitFor(() => expect(configureApprovalRoute).toHaveBeenCalled());
+  });
+
+  it("maps the raw approval_route_role_required backend code to a localized message instead of showing it verbatim", async () => {
+    // Simulates the role switching to a non-admin one in another tab
+    // right before the request lands — the backend still rejects it even
+    // though the client-side gate normally prevents this.
+    localStorage.setItem("demoRole", "legal");
+    configureApprovalRoute.mockRejectedValue(new FakeApiError("approval_route_role_required"));
+    renderBuilder();
+
+    fireEvent.click(screen.getByText("حفظ مسار الموافقات"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("لا تملك صلاحية تحديد مسار الموافقات"));
+    expect(toastError).not.toHaveBeenCalledWith("approval_route_role_required");
+  });
+
+  it("maps other known backend error codes to localized messages too", async () => {
+    localStorage.setItem("demoRole", "legal");
+    configureApprovalRoute.mockRejectedValue(new FakeApiError("approval_route_locked"));
+    renderBuilder();
+
+    fireEvent.click(screen.getByText("حفظ مسار الموافقات"));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("تم بدء مسار الموافقات بالفعل — يجب إلغاؤه أولًا قبل تعديل الإعداد")
+    );
+  });
+
+  it("falls back to the generic error message for an unmapped/unexpected backend code", async () => {
+    localStorage.setItem("demoRole", "legal");
+    configureApprovalRoute.mockRejectedValue(new FakeApiError("not_found"));
+    renderBuilder();
+
+    fireEvent.click(screen.getByText("حفظ مسار الموافقات"));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(toastError).not.toHaveBeenCalledWith("not_found");
+  });
+
+  it("updates the gate live when the demo role switcher changes role", async () => {
+    localStorage.setItem("demoRole", "finance");
+    renderBuilder();
+    await screen.findByText("لا تملك صلاحية تحديد مسار الموافقات");
+
+    localStorage.setItem("demoRole", "executive");
+    fireEvent(window, new Event("demo-role-changed"));
+
+    await waitFor(() => expect(screen.queryByText("لا تملك صلاحية تحديد مسار الموافقات")).toBeNull());
   });
 });
