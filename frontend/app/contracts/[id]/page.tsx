@@ -290,6 +290,7 @@ export default function ContractDetailPage() {
         contractId={id}
         onStartApproval={() => setTab("approvals")}
         onCreateSignature={() => setTab("signature")}
+        onLifecycleChange={load}
       />
       <div className="surface-panel grid gap-4 p-4 md:grid-cols-4">
         <div>

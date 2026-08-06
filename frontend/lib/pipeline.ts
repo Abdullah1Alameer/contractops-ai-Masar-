@@ -57,22 +57,29 @@ const LABEL_KEYS: Record<PipelineKey, TKey> = {
   completed: "home.pipeline.completed",
 };
 
+// Representative canonical `contracts.stage` value per landing bucket (docs/
+// contract-lifecycle-policy.md §3's "Landing bucket" column). This used to
+// map every pre-negotiation bucket to the literal string "negotiation" —
+// stale even before the upload-default fix, since "draft"/"ready_for_client"
+// have been real, distinct stages since this pipeline module was written.
 const SERVER_STAGE: Record<PipelineKey, string> = {
-  draft: "negotiation",
-  ai_review: "negotiation",
-  sent_to_client: "negotiation",
-  client_reviewing: "negotiation",
+  draft: "draft",
+  ai_review: "draft",
+  sent_to_client: "client_review",
+  client_reviewing: "client_review",
   negotiating: "negotiation",
   internal_review: "internal_review",
-  awaiting_signature: "awaiting_signature",
+  awaiting_signature: "ready_to_sign",
   signed: "signed",
   active: "active",
-  completed: "active",
+  completed: "completed",
 };
 
 const KNOWN_STAGES = new Set([
   "",
   "draft",
+  "ready_for_client",
+  "client_review",
   "negotiation",
   "internal_review",
   "approved",
@@ -82,6 +89,9 @@ const KNOWN_STAGES = new Set([
   "signed",
   "active",
   "completed",
+  "rejected",
+  "cancelled",
+  "terminated",
 ]);
 const KNOWN_CONTRACT_STATUSES = new Set(["processing", "ready", "needs_review", "failed", "unsupported", "completed"]);
 const KNOWN_REVIEW_STATUSES = new Set(["sent", "opened", "approved", "rejected", "changes_requested", "expired"]);
@@ -174,9 +184,13 @@ export function bucketContract(c: HomeContractRow): PipelineKey {
   }
   if (review === "opened") return "client_reviewing";
   if (review === "sent") return "sent_to_client";
+  // Stage is client_review but workflow_summary didn't carry a review
+  // status (e.g. summary hasn't been recomputed yet) — still route to the
+  // client-review bucket rather than falling through to draft.
+  if (stage === "client_review") return "sent_to_client";
 
   if (status === "needs_review") return "ai_review";
-  if (status === "processing" || stage === "draft") return "draft";
+  if (status === "processing" || stage === "draft" || stage === "ready_for_client") return "draft";
 
   return "draft";
 }

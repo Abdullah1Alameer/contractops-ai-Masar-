@@ -5,26 +5,15 @@ Drives the one demonstrable release path end to end against the live API and
 database, using a local capture SMTP server so email delivery is proven
 without any real inbox or provider credentials:
 
-  upload -> AI extraction -> client review email -> public review ->
-  request changes -> negotiation (AI analysis + counterproposal) ->
-  client accepts -> internal approval (4 ordered roles) -> ordered
-  signature emails -> both signers sign -> signed artifacts -> manual
-  activation.
+  upload -> draft -> mark ready for client -> ready_for_client ->
+  client review email -> public review -> request changes -> negotiation
+  (AI analysis + counterproposal) -> client accepts -> internal approval
+  (4 ordered roles) -> ordered signature emails -> both signers sign ->
+  signed artifacts -> manual activation.
 
 Every synthetic contract created here is deleted in `finally`, and file
 residue in STORAGE_DIR plus DB row residue are verified to be zero before
 exit.
-
-Known pre-existing gap this script bridges: `POST /api/contracts` (frozen F1
-surface) never fires the `contract_ready_for_client` lifecycle event, so a
-freshly uploaded contract is left at the `contracts.stage` DB default
-("negotiation" — see database/migrations/011_approval_workflow.sql) instead
-of entering the `draft -> ready_for_client` pipeline the lifecycle engine
-otherwise encodes. This script bridges that one gap with a direct,
-audited stage write (mirrors `app.services.lifecycle.set_stage`: a plain
-stage UPDATE plus a `contract_stage_changed` activity row) rather than
-silently relying on the accidental default. It does not touch the frozen
-upload endpoint.
 """
 from __future__ import annotations
 
@@ -35,7 +24,6 @@ import smtpd
 import sys
 import threading
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from pathlib import Path
@@ -152,33 +140,6 @@ def _synthetic_pdf_bytes() -> bytes:
 
 
 # --------------------------------------------------------------------------
-# Bridge: draft/legacy-default -> ready_for_client (see module docstring)
-# --------------------------------------------------------------------------
-def bridge_to_ready_for_client(contract_id: str) -> None:
-    with db_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT stage FROM contracts WHERE id = %s", (contract_id,))
-        (previous,) = cur.fetchone()
-        cur.execute(
-            "UPDATE contracts SET stage = 'ready_for_client' WHERE id = %s",
-            (contract_id,),
-        )
-        cur.execute(
-            """
-            INSERT INTO activity_events (id, contract_id, event_type, actor, metadata)
-            VALUES (%s, %s, 'contract_stage_changed', 'golden-path-smoke',
-                    %s::jsonb)
-            """,
-            (
-                str(uuid.uuid4()),
-                contract_id,
-                json.dumps({"from": previous, "to": "ready_for_client", "bridge": True}),
-            ),
-        )
-        conn.commit()
-
-
-# --------------------------------------------------------------------------
 # Storage residue tracking
 # --------------------------------------------------------------------------
 def _track_storage_keys(contract_id: str) -> None:
@@ -233,13 +194,22 @@ def run_golden_path(client: httpx.Client, capture: _CaptureSMTPServer) -> None:
     check("upload returns 201", upload.status_code == 201, upload.text[:300])
     contract_id = upload.json()["id"]
     created_contracts.append(contract_id)
+    check("new contract starts in draft, not negotiation", _stage(contract_id) == "draft", _stage(contract_id))
 
     # 2) Real AI extraction (existing, provider-dependent capability).
     extract = client.post(f"/api/contracts/{contract_id}/extract", headers=headers())
     check("extract returns 200", extract.status_code == 200, extract.text[:300])
     check("extract reports supported contract", extract.json().get("supported") is not False, extract.json())
+    check("extraction alone does not move the contract out of draft", _stage(contract_id) == "draft", _stage(contract_id))
 
-    bridge_to_ready_for_client(contract_id)
+    # 2b) The one authorized internal action that unlocks client review.
+    mark_ready = client.post(f"/api/contracts/{contract_id}/mark-ready-for-client", headers=headers())
+    check("mark-ready-for-client returns 200", mark_ready.status_code == 200, mark_ready.text[:300])
+    check(
+        "contract entered ready_for_client",
+        _stage(contract_id) == "ready_for_client",
+        _stage(contract_id),
+    )
 
     # 3) Send for client review — proves review-invitation SMTP delivery.
     send = client.post(

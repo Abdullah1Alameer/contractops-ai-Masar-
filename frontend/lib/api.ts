@@ -221,6 +221,18 @@ export async function publicApiJson<T>(path: string, method: string, body: unkno
   });
 }
 
+// draft -> ready_for_client, the one internal action that unlocks
+// "Send for Client Review". See backend/app/services/contract_lifecycle.py.
+export async function markContractReadyForClient(contractId: string) {
+  const res = await apiJson<{ id: string; stage: string }>(
+    `/api/contracts/${contractId}/mark-ready-for-client`,
+    "POST",
+    {}
+  );
+  invalidateContract(contractId);
+  return res;
+}
+
 export async function sendContractForReview(
   contractId: string,
   body: {

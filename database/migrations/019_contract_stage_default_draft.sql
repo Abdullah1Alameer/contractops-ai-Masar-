@@ -1,0 +1,12 @@
+-- Root-cause fix: newly uploaded contracts were entering the canonical
+-- lifecycle stage machine at "negotiation" instead of "draft", because the
+-- `contracts.stage` column default was set to 'negotiation' back in
+-- 011_approval_workflow.sql — before the canonical lifecycle engine
+-- (backend/app/services/lifecycle.py) existed, when there was no
+-- draft/ready_for_client concept yet and 'negotiation' served as a generic
+-- "needs attention" catch-all for pre-existing rows during that migration.
+--
+-- This changes only the DEFAULT applied to future inserts that omit
+-- `stage`. It does not touch any existing row's stage value — no backfill,
+-- no data risk, fully additive and reversible.
+ALTER TABLE contracts ALTER COLUMN stage SET DEFAULT 'draft';

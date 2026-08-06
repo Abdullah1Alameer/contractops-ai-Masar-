@@ -86,6 +86,27 @@ describe("bucketContract", () => {
     expect(bucketContract(row({ stage: "active" }))).toBe("active");
   });
 
+  it("buckets a freshly uploaded contract (stage draft, still processing) as draft, never negotiating", () => {
+    expect(bucketContract(row({ stage: "draft", status: "processing" }))).toBe("draft");
+  });
+
+  it("buckets draft with extraction complete as draft (no negotiation/review workflow exists yet)", () => {
+    expect(bucketContract(row({ stage: "draft", status: "ready" }))).toBe("draft");
+  });
+
+  it("buckets ready_for_client as draft (the existing pre-client-review bucket)", () => {
+    expect(bucketContract(row({ stage: "ready_for_client", status: "ready" }))).toBe("draft");
+  });
+
+  it("buckets client_review by review status, falling back to sent_to_client if workflow_summary lacks one", () => {
+    expect(
+      bucketContract(row({ stage: "client_review", workflow_summary: workflow({ review_status: "opened" }) }))
+    ).toBe("client_reviewing");
+    expect(bucketContract(row({ stage: "client_review", workflow_summary: workflow({}) }))).toBe(
+      "sent_to_client"
+    );
+  });
+
   it("does not crash or classify unknown workflow values as negotiating", () => {
     expect(
       bucketContract(

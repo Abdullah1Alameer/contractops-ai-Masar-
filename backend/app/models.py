@@ -47,7 +47,14 @@ class Contract(Base):
     language = Column(Text, nullable=True)  # 'ar' | 'en' | 'mixed'
     calendar = Column(Text, nullable=True)  # 'gregorian' | 'hijri' | 'mixed'
     status = Column(Text, nullable=False, default="processing")
-    stage = Column(Text, nullable=False, default="negotiation")
+    # Canonical entry stage per docs/contract-lifecycle-policy.md §3 — a
+    # freshly created contract has not been through any lifecycle event yet.
+    # Was "negotiation" (matching the historical DB column default below,
+    # before the canonical lifecycle engine existed); see
+    # database/migrations/019_contract_stage_default_draft.sql for the
+    # matching DB-level fix (existing rows are untouched — DEFAULT only
+    # affects future inserts that don't set `stage` explicitly).
+    stage = Column(Text, nullable=False, default="draft")
     file_url = Column(Text)
     raw_text = Column(Text)
     page_layout = Column(JSONB, nullable=True)

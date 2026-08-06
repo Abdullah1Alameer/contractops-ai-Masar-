@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .deps import require_token
 from .routers import (
     approvals,
+    contract_lifecycle,
     contracts,
     counterparties,
     dashboard,
@@ -32,6 +33,7 @@ app.add_middleware(
 
 protected = [Depends(require_token)]
 app.include_router(contracts.router, prefix="/api", dependencies=protected)
+app.include_router(contract_lifecycle.router, prefix="/api", dependencies=protected)
 app.include_router(dashboard.router, prefix="/api", dependencies=protected)
 app.include_router(obligations.router, prefix="/api", dependencies=protected)
 app.include_router(util.router, prefix="/api", dependencies=protected)
