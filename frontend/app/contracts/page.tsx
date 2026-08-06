@@ -20,7 +20,7 @@ import { api, deleteContract } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { filterContractsByPipelineBucket } from "@/lib/pipeline";
 import type { ContractListItem } from "@/lib/types";
-import { formatSAR } from "@/lib/utils";
+import { formatDate, formatNum, formatSAR } from "@/lib/utils";
 
 const PAGE_SIZE = 25;
 
@@ -175,7 +175,8 @@ function ContractsPageContent() {
     {
       id: "version",
       header: t("versions.col.version"),
-      cell: (c) => `${c.current_version_number ?? 1}/${c.total_versions ?? 1}`,
+      cell: (c) =>
+        `${formatNum(c.current_version_number ?? 1, lang)}/${formatNum(c.total_versions ?? 1, lang)}`,
     },
     {
       id: "stage",
@@ -190,7 +191,7 @@ function ContractsPageContent() {
     {
       id: "created",
       header: t("list.col.created"),
-      cell: (c) => c.created_at?.slice(0, 10) ?? "—",
+      cell: (c) => formatDate(c.created_at, lang),
     },
     {
       id: "status",
@@ -208,9 +209,9 @@ function ContractsPageContent() {
       header: t("list.col.obligations"),
       cell: (c) => (
         <>
-          {c.obligation_counts.pending} {t("list.pending")}
+          {formatNum(c.obligation_counts.pending, lang)} {t("list.pending")}
           {c.obligation_counts.overdue > 0 && (
-            <span className="ms-1 text-danger-600">{c.obligation_counts.overdue}</span>
+            <span className="ms-1 font-bold text-rose-600">{formatNum(c.obligation_counts.overdue, lang)}</span>
           )}
         </>
       ),
@@ -334,7 +335,7 @@ function ContractsPageContent() {
           />
           <div className="flex items-center justify-between text-sm text-gray-600">
             <span>
-              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} / {filtered.length}
+              {formatNum(page * PAGE_SIZE + 1, lang)}–{formatNum(Math.min((page + 1) * PAGE_SIZE, filtered.length), lang)} / {formatNum(filtered.length, lang)}
             </span>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>

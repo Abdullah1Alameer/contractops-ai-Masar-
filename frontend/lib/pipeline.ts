@@ -231,7 +231,9 @@ export function summarizePipeline(
 
 export function formatPortfolioSar(value: number, locale: string): string {
   if (value <= 0) return "—";
-  return new Intl.NumberFormat(locale === "ar" ? "ar-SA" : "en-SA", {
+  // `-u-nu-arab` is explicit rather than relying on the locale's default
+  // numbering system, so Arabic never falls back to Latin digits.
+  return new Intl.NumberFormat(locale === "ar" ? "ar-SA-u-nu-arab" : "en-SA", {
     style: "currency",
     currency: "SAR",
     maximumFractionDigits: 0,

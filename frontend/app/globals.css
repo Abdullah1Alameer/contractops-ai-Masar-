@@ -2,57 +2,85 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Riyadh Emerald — ContractOps AI / ميثاق
+ *
+ * RTL note: this app renders dir="rtl" by default and must stay mirror-clean.
+ * Everything below uses logical properties (inline-start/end, margin-inline,
+ * text-start) rather than left/right, and no entrance keyframe translates on
+ * the X axis — so nothing needs a [dir] override to work in both directions.
+ */
+
+:root {
+  /* Scroll rail grows from the start edge of the writing direction. */
+  --progress-origin: right;
+  --ring-circumference: 264;
+  --ring-offset-target: 0;
+  --stagger-step: 60ms;
+}
+
+[dir="ltr"] {
+  --progress-origin: left;
+}
+
 body {
-  @apply bg-muted-50 text-gray-900 antialiased;
+  @apply bg-porcelain text-ink-900 antialiased;
+}
+
+@layer base {
+  /* Values, countdowns and table figures need to line up column-wise. */
+  .tnum,
+  table td,
+  table th {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    @apply bg-brand-200 text-brand-900;
+  }
+
+  * {
+    scrollbar-color: theme("colors.neutral.300") transparent;
+    scrollbar-width: thin;
+  }
 }
 
 @layer utilities {
+  /* ---------- focus ---------- */
+
+  /* Scoped to :focus-visible. Previously the ring was applied unconditionally,
+     which drew a permanent emerald outline around every button, link and nav
+     item in the app. */
   .focus-ring {
-    @apply outline-none ring-2 ring-brand-600 ring-offset-2 ring-offset-white;
+    @apply outline-none;
   }
 
+  .focus-ring:focus-visible {
+    @apply ring-2 ring-brand-600 ring-offset-2 ring-offset-white;
+  }
+
+  /* Same, for controls sitting on a dark surface (the nav rail), where a white
+     offset would read as a halo. */
+  .focus-ring-invert {
+    @apply outline-none;
+  }
+
+  .focus-ring-invert:focus-visible {
+    @apply ring-2 ring-brand-400 ring-offset-2 ring-offset-ink-900;
+  }
+
+  /* ---------- surfaces ---------- */
+
   .card-surface {
-    @apply rounded-xl border border-gray-200 bg-white shadow-card;
+    @apply rounded-xl border border-neutral-200 bg-white shadow-card;
   }
 
   .hover-lift {
-    @apply motion-safe:transition-shadow motion-safe:duration-200 hover:shadow-cardHover;
-  }
-
-  .skeleton-shimmer {
-    background: linear-gradient(90deg, #f3f4f6 0%, #e5e7eb 50%, #f3f4f6 100%);
-    background-size: 200% 100%;
-    @apply motion-safe:animate-shimmer;
-  }
-
-  .chip {
-    @apply inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700;
-  }
-
-  .bidi-plaintext {
-    unicode-bidi: plaintext;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .chip-active {
-    @apply border-brand-600/20 bg-brand-50 text-brand-800;
-  }
-
-  .data-cell {
-    @apply align-middle text-start;
-  }
-
-  .section-title {
-    @apply text-xs font-bold uppercase tracking-wide text-gray-400;
-  }
-
-  .hairline-b {
-    @apply border-gray-100;
+    @apply motion-safe:transition-all motion-safe:duration-300 motion-safe:ease-settle hover:shadow-cardHover motion-safe:hover:-translate-y-0.5;
   }
 
   .surface-card {
-    @apply rounded-card border border-neutral-200/80 bg-white shadow-elevation-1 motion-safe:transition-shadow motion-safe:duration-200 hover:shadow-elevation-2;
+    @apply rounded-card border border-neutral-200/80 bg-white shadow-elevation-1 motion-safe:transition-all motion-safe:duration-300 motion-safe:ease-settle hover:border-neutral-300 hover:shadow-elevation-2;
   }
 
   .surface-panel {
@@ -60,19 +88,73 @@ body {
   }
 
   .surface-glass {
-    @apply rounded-card border border-white/50 bg-white/70 shadow-elevation-2 backdrop-blur-xl dark:border-neutral-700/80 dark:bg-neutral-900/70;
+    @apply rounded-card border border-white/60 bg-white/70 shadow-elevation-2 backdrop-blur-xl backdrop-saturate-150;
+  }
+
+  /*
+   * The house glass surface. A white (not grey) hairline is what separates
+   * premium frosted glass from a flat box: it reads as the lit edge of a pane
+   * rather than as a drawn border. The shadow is wide and very low-opacity so
+   * cards float without any visible grey halo.
+   */
+  .glass-card {
+    @apply rounded-3xl border border-white bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-2xl backdrop-saturate-150;
+  }
+
+  .glass-card-hover {
+    @apply motion-safe:transition-all motion-safe:duration-300 motion-safe:ease-settle hover:shadow-[0_16px_44px_rgb(0,0,0,0.07)] motion-safe:hover:-translate-y-1;
+  }
+
+  /* Tactile primary action. */
+  .btn-primary-3d {
+    @apply inline-flex items-center gap-2.5 rounded-full bg-emerald-600 px-7 py-3.5 text-sm font-bold text-white shadow-[0_4px_14px_0_rgb(5,150,105,0.39)] transition-all duration-200 hover:bg-emerald-700 hover:shadow-[0_6px_20px_rgba(5,150,105,0.23)] motion-safe:hover:-translate-y-0.5;
+  }
+
+  .btn-secondary-glass {
+    @apply inline-flex items-center gap-2.5 rounded-full border border-white bg-white/70 px-7 py-3.5 text-sm font-bold text-slate-700 shadow-[0_4px_14px_0_rgb(0,0,0,0.04)] backdrop-blur-2xl transition-all duration-200 hover:text-emerald-700 hover:shadow-[0_6px_20px_rgba(0,0,0,0.07)] motion-safe:hover:-translate-y-0.5;
+  }
+
+  /* Raised, tinted surface for the one element on a screen that should
+     out-rank every other card. */
+  .surface-feature {
+    @apply relative overflow-hidden rounded-xl2 border border-brand-100 bg-white shadow-elevation-3;
+  }
+
+  .surface-dark {
+    @apply rounded-xl2 border border-white/10 bg-ink-900 text-ink-100 shadow-elevation-4;
   }
 
   .hero-gradient {
-    @apply relative overflow-hidden rounded-xl2 border border-brand-100/60 bg-gradient-to-br from-brand-50/80 via-white to-info-50/40 dark:border-brand-900/50 dark:from-neutral-900 dark:via-neutral-900 dark:to-brand-900/20;
+    @apply relative overflow-hidden rounded-xl2 border border-brand-100/70 bg-white bg-mesh-emerald motion-safe:animate-meshDrift;
   }
 
   .divider {
     @apply h-px w-full bg-neutral-200;
   }
 
-  .kbd {
-    @apply rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 font-mono text-[10px] text-neutral-600;
+  .hairline-b {
+    @apply border-neutral-100;
+  }
+
+  /* ---------- accents ---------- */
+
+  .text-gradient-brand {
+    @apply bg-brand-sheen bg-clip-text text-transparent;
+  }
+
+  /* Colour bar pinned to a card's top edge; inset-x spans correctly in RTL. */
+  .accent-bar {
+    @apply pointer-events-none absolute inset-x-0 top-0 h-1 rounded-t-[inherit];
+  }
+
+  /* ---------- chips / pills ---------- */
+
+  .chip {
+    @apply inline-flex items-center rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 motion-safe:transition-colors motion-safe:duration-200;
+  }
+
+  .chip-active {
+    @apply border-brand-600/25 bg-brand-50 text-brand-800;
   }
 
   .pill {
@@ -83,8 +165,36 @@ body {
     @apply h-1.5 w-1.5 rounded-full bg-brand-600;
   }
 
+  /* Semantic state pills. The hue carries the meaning fixed in
+     tailwind.config.ts, so a contract's state reads the same everywhere. */
+  .pill-safe {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-800 ring-1 ring-inset ring-brand-600/15;
+  }
+
+  .pill-clock {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-gold-50 px-2.5 py-1 text-xs font-semibold text-gold-700 ring-1 ring-inset ring-gold-500/25;
+  }
+
+  .pill-urgent {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-warning-50 px-2.5 py-1 text-xs font-semibold text-warning-700 ring-1 ring-inset ring-warning-500/25;
+  }
+
+  .pill-breach {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-danger-50 px-2.5 py-1 text-xs font-semibold text-danger-700 ring-1 ring-inset ring-danger-500/25;
+  }
+
+  .pill-ai {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-ai-50 px-2.5 py-1 text-xs font-semibold text-ai-700 ring-1 ring-inset ring-ai-500/25;
+  }
+
+  .kbd {
+    @apply rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 font-mono text-[10px] text-neutral-600;
+  }
+
+  /* ---------- typography ---------- */
+
   .text-title {
-    @apply text-2xl font-bold tracking-tight text-neutral-900 md:text-3xl;
+    @apply text-2xl font-bold tracking-tight text-ink-900 md:text-3xl;
   }
 
   .text-eyebrow {
@@ -95,6 +205,10 @@ body {
     @apply text-sm text-neutral-500;
   }
 
+  .section-title {
+    @apply text-xs font-bold uppercase tracking-wide text-neutral-400;
+  }
+
   .link-quiet {
     @apply text-sm font-medium text-neutral-600 hover:text-brand-700 motion-safe:transition-colors;
   }
@@ -102,13 +216,98 @@ body {
   .link-strong {
     @apply text-sm font-semibold text-brand-700 hover:text-brand-800 hover:underline;
   }
+
+  /* ---------- tables / text direction ---------- */
+
+  .data-cell {
+    @apply align-middle text-start;
+  }
+
+  .bidi-plaintext {
+    unicode-bidi: plaintext;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---------- motion ---------- */
+
+  /* Stagger: set --i on each child and they cascade in. The delay is capped so
+     a long list never leaves the reader waiting on its tail.
+     The :nth-child(n) raises specificity to (0,2,0) so this beats Tailwind's
+     `animate-*` shorthand, which otherwise resets animation-delay to 0. */
+  .stagger > *:nth-child(n) {
+    animation-delay: calc(min(var(--i, 0) * var(--stagger-step), 640ms));
+  }
+
+  .reveal {
+    @apply motion-safe:animate-riseIn;
+  }
+
+  .reveal-scale {
+    @apply motion-safe:animate-scaleIn;
+  }
+
+  /* Scroll-driven reveal. ScrollReveal.tsx adds .is-visible via
+     IntersectionObserver. Default state is visible, so if JS or the observer
+     fails the content is never trapped invisible. */
+  .reveal-on-scroll {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal-on-scroll {
+      opacity: 0;
+      transform: translateY(20px);
+      transition:
+        opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+        transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+      transition-delay: calc(min(var(--i, 0) * var(--stagger-step), 640ms));
+    }
+
+    .reveal-on-scroll.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .skeleton-shimmer {
+    @apply relative overflow-hidden bg-neutral-100;
+  }
+
+  .skeleton-shimmer::after {
+    content: "";
+    @apply absolute inset-0 bg-shimmer motion-safe:animate-shimmer;
+  }
+
+  /* Live "a clock is running" halo. */
+  .halo::before {
+    content: "";
+    @apply pointer-events-none absolute inset-0 rounded-[inherit] ring-2 ring-gold-500/40 motion-safe:animate-pulseRing;
+  }
+
+  .halo-danger::before {
+    content: "";
+    @apply pointer-events-none absolute inset-0 rounded-[inherit] ring-2 ring-danger-500/40 motion-safe:animate-pulseRing;
+  }
 }
 
+/*
+ * Reduced motion. Tailwind's motion-safe: variant covers utilities, but
+ * anything animated via inline style, a CSS variable or a third-party class
+ * would slip through — so this is a hard backstop across the document.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .motion-safe\:animate-shimmer,
-  .motion-safe\:animate-fadeIn,
-  .motion-safe\:animate-slideUp,
-  .motion-safe\:animate-pulse {
-    animation: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .reveal-on-scroll {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

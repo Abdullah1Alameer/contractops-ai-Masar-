@@ -4,6 +4,7 @@ import { useMemo } from "react";
 
 import AiTodayWidget from "@/components/landing/AiTodayWidget";
 import AttentionList from "@/components/landing/AttentionList";
+import FeatureShowcase from "@/components/landing/FeatureShowcase";
 import HeroGreeting from "@/components/landing/HeroGreeting";
 import KpiGrid from "@/components/landing/KpiGrid";
 import PipelineRail, { PipelineRailSkeleton } from "@/components/landing/PipelineRail";
@@ -12,7 +13,6 @@ import RecentActivityTimeline from "@/components/landing/RecentActivityTimeline"
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
 import RefreshingDot from "@/components/ui/RefreshingDot";
-import { SkeletonKPI } from "@/components/ui/Skeleton";
 import { api, listNegotiationMonitorThreads } from "@/lib/api";
 import { useCachedFetch } from "@/lib/cache";
 import { useI18n } from "@/lib/i18n";
@@ -141,14 +141,15 @@ export default function LandingPage() {
         {isValidating ? <RefreshingDot /> : null}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-12 lg:items-stretch">
-        <div className="lg:col-span-8">
-          <HeroGreeting />
-        </div>
-        <div className="lg:col-span-4">
-          {loading ? <div className="surface-glass h-full min-h-[12rem] skeleton-shimmer" /> : <AiTodayWidget metrics={aiToday} />}
-        </div>
-      </div>
+      {/* Hero runs the full measure — it carries the display line and the
+          primary actions, and its own internal 12-column grid needs the room. */}
+      <HeroGreeting />
+
+      {loading ? (
+        <div className="skeleton-shimmer h-32 rounded-xl2" />
+      ) : (
+        <KpiGrid data={kpiData} />
+      )}
 
       {loading ? (
         <PipelineRailSkeleton />
@@ -156,19 +157,15 @@ export default function LandingPage() {
         <PipelineRail buckets={pipelineBuckets} />
       )}
 
-      {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <SkeletonKPI key={i} />
-          ))}
-        </div>
-      ) : (
-        <KpiGrid data={kpiData} />
-      )}
+      <FeatureShowcase />
 
       <div className="grid gap-6 lg:grid-cols-12">
         <div className="lg:col-span-5">
-          <QuickActions />
+          {loading ? (
+            <div className="skeleton-shimmer h-64 rounded-xl2" />
+          ) : (
+            <AiTodayWidget metrics={aiToday} />
+          )}
         </div>
         <div className="lg:col-span-7">
           {summary ? (
@@ -187,6 +184,8 @@ export default function LandingPage() {
           )}
         </div>
       </div>
+
+      <QuickActions />
 
       {summary ? (
         <RecentActivityTimeline events={summary.recent_activity ?? []} />

@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { useI18n } from "@/lib/i18n";
+import { formatCount, formatNum } from "@/lib/utils";
 
 export type AiTodayMetrics = {
   needsAttention: number;
@@ -12,7 +13,7 @@ export type AiTodayMetrics = {
 };
 
 export default function AiTodayWidget({ metrics }: { metrics: AiTodayMetrics }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
 
   const lines = [
     {
@@ -38,14 +39,14 @@ export default function AiTodayWidget({ metrics }: { metrics: AiTodayMetrics }) 
   ];
 
   return (
-    <aside className="surface-glass p-5 md:p-6 motion-safe:animate-slideUp">
-      <h2 className="text-sm font-bold uppercase tracking-wide text-brand-700 dark:text-brand-300">{t("home.aiToday.title")}</h2>
+    <aside className="glass-card glass-card-hover p-6 md:p-7 motion-safe:animate-slideUp">
+      <h2 className="text-sm font-bold tracking-tight text-emerald-700">{t("home.aiToday.title")}</h2>
       <ul className="mt-4 space-y-3">
         {lines.map((line) => (
           <li key={line.href}>
-            <Link href={line.href} className="group flex items-baseline gap-2 rounded-lg px-1 py-0.5 hover:bg-brand-50/50 dark:hover:bg-brand-950/30">
-              <span className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-100">{line.count}</span>
-              <span className="text-sm text-neutral-600 group-hover:text-brand-800 dark:text-neutral-400 dark:group-hover:text-brand-200">
+            <Link href={line.href} className="group flex items-baseline gap-2.5 rounded-xl px-2 py-1.5 transition-colors duration-200 hover:bg-emerald-50/60">
+              <span className="tnum text-2xl font-extrabold tracking-tight text-slate-900">{formatCount(line.count, lang)}</span>
+              <span className="text-sm font-medium text-slate-500 group-hover:text-emerald-700">
                 {line.label}
               </span>
             </Link>

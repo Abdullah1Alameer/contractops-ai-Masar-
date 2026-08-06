@@ -52,11 +52,11 @@ export default function DataTable<T>({
   };
 
   return (
-    <div className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-card">
+    <div className="glass-card overflow-auto">
       <table className="w-full min-w-[720px] text-sm">
         <thead
           className={cn(
-            "border-b bg-muted-50 text-start text-gray-600",
+            "border-b border-white/80 bg-white/50 text-start text-[11px] font-bold uppercase tracking-wide text-slate-500 backdrop-blur-xl",
             stickyHeader && "sticky top-0 z-10 shadow-sm"
           )}
         >
@@ -81,8 +81,8 @@ export default function DataTable<T>({
                 key={key}
                 className={cn(
                   "border-b last:border-0 hairline-b",
-                  i % 2 === 1 && "bg-muted-50/40",
-                  onRowClick && "cursor-pointer hover:bg-muted-50/80"
+                  i % 2 === 1 && "bg-white/30",
+                  onRowClick && "cursor-pointer transition-colors duration-200 hover:bg-emerald-50/50"
                 )}
                 onClick={() => onRowClick?.(row)}
               >

@@ -4,7 +4,6 @@ import Link from "next/link";
 
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
-import SectionHeader from "@/components/ui/SectionHeader";
 import Timeline from "@/components/ui/Timeline";
 import { mapActivityEvents } from "@/lib/activity";
 import { useI18n } from "@/lib/i18n";
@@ -30,9 +29,9 @@ export default function RecentActivityTimeline({ events }: { events: ActivityRow
   });
 
   return (
-    <Card className="surface-panel border-0 shadow-none">
+    <Card className="glass-card border-0">
       <CardHeader>
-        <SectionHeader title={t("home.recentActivity.title")} />
+        <h2 className="text-lg font-extrabold tracking-tight text-slate-900">{t("home.recentActivity.title")}</h2>
       </CardHeader>
       <CardBody>
         {items.length === 0 ? (
