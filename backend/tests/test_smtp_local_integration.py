@@ -237,6 +237,19 @@ def test_signature_invitation_is_delivered_through_local_smtp(capture_smtp, sign
 
     assert len(capture_smtp.messages) == 0, "creation must not send any invitation"
 
+    signer_ids = [s["id"] for s in created.json()["signers"]]
+    fields = client.put(
+        f"/api/signature-requests/{request_id}/fields",
+        headers=AUTH,
+        json={
+            "fields": [
+                {"signer_id": sid, "page_number": 1, "x": 0.08, "y": 0.1 + i * 0.15, "width": 0.36, "height": 0.06, "field_type": "signature", "required": True}
+                for i, sid in enumerate(signer_ids)
+            ]
+        },
+    )
+    assert fields.status_code == 200, fields.text
+
     sent = client.post(f"/api/signature-requests/{request_id}/send", headers=AUTH)
     assert sent.status_code == 200, sent.text
     deliveries = sent.json()["deliveries"]

@@ -11,8 +11,19 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+import fitz
+
 from ..config import REVIEW_BASE_URL, get_email_delivery_settings
-from ..models import ApprovalWorkflow, Contract, ContractVersion, OutboundMessage, SignatureEvent, SignatureRequest, SignatureSigner
+from ..models import (
+    ApprovalWorkflow,
+    Contract,
+    ContractVersion,
+    OutboundMessage,
+    SignatureEvent,
+    SignatureField,
+    SignatureRequest,
+    SignatureSigner,
+)
 from .approvals import log_activity
 from .lifecycle import (
     ContractStage,
@@ -50,6 +61,7 @@ CONSENT_AR = "أوافق على توقيع هذا المستند إلكترون�
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 SIGNATURE_INVITATION_MESSAGE_TYPE = "signature_invitation"
 ACTIVATION_ROLES = frozenset({"legal", "executive"})
+FIELD_TYPES = frozenset({"signature", "initials", "name", "date"})
 
 
 class SignatureError(ValueError):
@@ -416,6 +428,16 @@ def send_request(request_id, db: Session, *, actor: str = "demo") -> dict:
         if req.status not in ("draft", "created"):
             _raise(409, "invalid_transition")
         signers = _signers_for(req.id, db)
+        fields = list_fields(req.id, db)
+        fields_by_signer: dict[str, list[SignatureField]] = {}
+        for f in fields:
+            fields_by_signer.setdefault(str(f.signer_id), []).append(f)
+        missing = [
+            s for s in signers
+            if not any(f.field_type == "signature" for f in fields_by_signer.get(str(s.id), []))
+        ]
+        if missing:
+            _raise(409, "signature_fields_required")
         invitees = signers[:1] if req.signing_order_enabled else signers
         now = _utcnow()
         req.status, req.sent_at, req.updated_at = "sent", now, now
@@ -509,6 +531,163 @@ def _waiting_for_prior(signer: SignatureSigner, signers: list[SignatureSigner], 
     return False
 
 
+# --- Signature field placement (Bug: signature location inside the document) ---
+# See docs/signature-placement-and-template-flow-report.md.
+
+
+def _pdf_page_count(pdf_bytes: bytes) -> int:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
+
+
+def list_fields(request_id, db: Session) -> list[SignatureField]:
+    return (
+        db.query(SignatureField)
+        .filter_by(signature_request_id=request_id)
+        .order_by(SignatureField.page_number.asc(), SignatureField.created_at.asc())
+        .all()
+    )
+
+
+def serialize_field(f: SignatureField) -> dict:
+    return {
+        "id": str(f.id),
+        "signer_id": str(f.signer_id),
+        "page_number": f.page_number,
+        "x": float(f.x),
+        "y": float(f.y),
+        "width": float(f.width),
+        "height": float(f.height),
+        "field_type": f.field_type,
+        "required": f.required,
+        "ai_suggested": f.ai_suggested,
+    }
+
+
+def suggest_fields(request_id, db: Session) -> list[dict]:
+    """Heuristic placement suggestion: one signature field near the bottom
+    of the document's last page per signer, staggered so ordered signers
+    don't overlap. Marked ai_suggested=True and NEVER persisted here — an
+    internal user must review and explicitly save (via replace_fields,
+    below) before these count for anything. send_request() blocks sending
+    until confirmed fields exist, so AI can never finalize placement
+    silently."""
+    req = get_request_by_id(request_id, db)
+    if req is None:
+        _raise(404, "not_found")
+    contract = db.get(Contract, req.contract_id)
+    if contract is None:
+        _raise(404, "not_found")
+    signers = _signers_for(req.id, db)
+    page_count = _pdf_page_count(original_bytes(contract))
+    last_page = page_count
+    out = []
+    for i, s in enumerate(sorted(signers, key=lambda x: x.signer_order)):
+        out.append(
+            {
+                "signer_id": str(s.id),
+                "page_number": last_page,
+                "x": 0.08 + (i % 2) * 0.48,
+                "y": min(0.78 + (i // 2) * 0.1, 0.88),
+                "width": 0.38,
+                "height": 0.06,
+                "field_type": "signature",
+                "required": True,
+                "ai_suggested": True,
+            }
+        )
+    return out
+
+
+def _validate_field_dict(f: dict, *, signer_ids: set[str], page_count: int) -> dict:
+    signer_id = str(f.get("signer_id") or "")
+    if signer_id not in signer_ids:
+        _raise(422, "field_signer_invalid")
+    try:
+        page_number = int(f["page_number"])
+    except (KeyError, TypeError, ValueError):
+        _raise(422, "field_page_invalid")
+    if page_number < 1 or page_number > page_count:
+        _raise(422, "field_page_invalid")
+    field_type = f.get("field_type", "signature")
+    if field_type not in FIELD_TYPES:
+        _raise(422, "field_type_invalid")
+    try:
+        x, y, width, height = (float(f["x"]), float(f["y"]), float(f["width"]), float(f["height"]))
+    except (KeyError, TypeError, ValueError):
+        _raise(422, "field_coordinates_invalid")
+    if not (0 <= x < 1 and 0 <= y < 1 and 0 < width <= 1 and 0 < height <= 1 and x + width <= 1.0001 and y + height <= 1.0001):
+        _raise(422, "field_coordinates_invalid")
+    return {
+        "signer_id": signer_id,
+        "page_number": page_number,
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "field_type": field_type,
+        "required": bool(f.get("required", True)),
+    }
+
+
+def replace_fields(request_id, db: Session, fields: list[dict], *, actor: str) -> list[dict]:
+    """Persists the confirmed field placement for a request, replacing any
+    prior placement wholesale. Only allowed before the request is sent —
+    fields are locked in at the same moment the request (and the version it
+    references) is locked in. Every saved row here has ai_suggested=False:
+    even if the internal user accepted an AI suggestion verbatim, saving it
+    through this endpoint is the explicit confirmation the spec requires."""
+    if not fields:
+        _raise(422, "fields_required")
+    try:
+        req = _lock_request(request_id, db)
+        contract = _lock_contract(req.contract_id, db)
+        version = _locked_current_version(contract.id, db)
+        if _is_stale(req, version):
+            _raise(409, "workflow_stale")
+        if req.status not in ("draft", "created"):
+            _raise(409, "invalid_transition")
+        signers = _signers_for(req.id, db)
+        signer_ids = {str(s.id) for s in signers}
+        page_count = _pdf_page_count(original_bytes(contract))
+        clean = [_validate_field_dict(f, signer_ids=signer_ids, page_count=page_count) for f in fields]
+        missing = [s for s in signers if not any(c["signer_id"] == str(s.id) and c["field_type"] == "signature" for c in clean)]
+        if missing:
+            _raise(422, "signature_field_required_per_signer")
+        db.query(SignatureField).filter_by(signature_request_id=req.id).delete()
+        rows = []
+        for f in clean:
+            row = SignatureField(
+                id=uuid.uuid4(),
+                signature_request_id=req.id,
+                signer_id=f["signer_id"],
+                version_id=req.version_id,
+                page_number=f["page_number"],
+                x=f["x"],
+                y=f["y"],
+                width=f["width"],
+                height=f["height"],
+                field_type=f["field_type"],
+                required=f["required"],
+                ai_suggested=False,
+                created_by=actor,
+            )
+            db.add(row)
+            rows.append(row)
+        log_activity(
+            db, req.contract_id, "signature_fields_placed", actor=actor,
+            metadata={"request_id": str(req.id), "field_count": len(rows)},
+        )
+        _commit(db, req)
+    except Exception:
+        db.rollback()
+        raise
+    return [serialize_field(r) for r in rows]
+
+
 def build_public_payload(raw_token: str, db: Session) -> dict:
     signer = get_signer_by_token(raw_token, db)
     if signer is None:
@@ -527,6 +706,10 @@ def build_public_payload(raw_token: str, db: Session) -> dict:
     completed = sum(1 for s in signers if s.status == "signed")
     waiting = _waiting_for_prior(signer, signers, req.signing_order_enabled)
     read_only = signer.status == "signed" or req.status in TERMINAL_REQUEST_STATUSES
+
+    # Only this signer's own fields — never another signer's placement, so a
+    # signer can never see (let alone fill) a field that isn't theirs.
+    own_fields = [serialize_field(f) for f in list_fields(req.id, db) if str(f.signer_id) == str(signer.id)]
 
     return {
         "contract_title": contract.title,
@@ -554,6 +737,7 @@ def build_public_payload(raw_token: str, db: Session) -> dict:
         "waiting_for_prior": waiting,
         "read_only": read_only or waiting,
         "declined": req.status == "declined" or signer.status == "declined",
+        "fields": own_fields,
     }
 
 
@@ -687,7 +871,7 @@ def submit_signature(
 
 
 def _finalize_request(req: SignatureRequest, contract: Contract, version: ContractVersion, signers: list[SignatureSigner], db: Session, *, actor: str, saved_keys: list[str]):
-    signed_pdf = build_signed_pdf(contract, req, signers)
+    signed_pdf = build_signed_pdf(contract, req, signers, list_fields(req.id, db))
     req.signed_hash = sha256_hex(signed_pdf)
     signed_key = storage.save(signed_pdf, f"signed_{req.id}.pdf")
     saved_keys.append(signed_key)
@@ -945,6 +1129,7 @@ def serialize_request(req: SignatureRequest, db: Session) -> dict:
         "progress": {"completed": completed, "total": len(signers)},
         "is_stale": request_is_stale,
         "version_id": str(req.version_id) if req.version_id else None,
+        "fields": [serialize_field(f) for f in list_fields(req.id, db)],
     }
 
 

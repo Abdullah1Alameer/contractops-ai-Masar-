@@ -5,6 +5,7 @@ import CreateSignatureDialog from "@/components/CreateSignatureDialog";
 import { useConfirm } from "@/components/feedback/ConfirmDialog";
 import { useToast } from "@/components/feedback/ToastProvider";
 import { DeliveryStatusBadge } from "@/components/SendForReviewDialog";
+import SignatureFieldPlacer from "@/components/SignatureFieldPlacer";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { Card, CardBody } from "@/components/ui/Card";
@@ -75,6 +76,9 @@ export default function SignaturePanel({
   useEffect(() => setActivated(false), [contractId]);
 
   const req = bundle?.request;
+  const fieldsDraftEditable = !!req && ["draft", "created"].includes(req.status);
+  const everySignerHasSignatureField =
+    !!req && req.signers.every((s) => (req.fields ?? []).some((f) => f.signer_id === s.id && f.field_type === "signature"));
   // `can_create` is the backend's own eligibility computation (stage ==
   // ready_to_sign, current version approved, active approved workflow, no
   // unresolved negotiations, no active request — see
@@ -222,7 +226,14 @@ export default function SignaturePanel({
           </Button>
         )}
         {req && ["draft", "created"].includes(req.status) && (
-          <Button variant="primary" size="sm" loading={pending === "send"} disabled={busy} onClick={send}>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={pending === "send"}
+            disabled={busy || !everySignerHasSignatureField}
+            title={!everySignerHasSignatureField ? t("signature.fields.missingWarning") : undefined}
+            onClick={send}
+          >
             {t("signature.send")}
           </Button>
         )}
@@ -312,6 +323,16 @@ export default function SignaturePanel({
         <>
           {req.is_stale && (
             <p className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm text-warning-900">{t("versions.stale")}</p>
+          )}
+          {req.signers.length > 0 && (
+            <SignatureFieldPlacer
+              contractId={contractId}
+              requestId={req.id}
+              signers={req.signers}
+              initialFields={req.fields ?? []}
+              locked={!fieldsDraftEditable}
+              onSaved={load}
+            />
           )}
           <RequestView
             req={req}

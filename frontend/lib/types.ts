@@ -751,6 +751,34 @@ export interface SignatureRequestRow {
   progress: { completed: number; total: number };
   is_stale?: boolean;
   version_id?: string | null;
+  fields?: SignatureField[];
+}
+
+// Signature field placement — see docs/signature-placement-and-template-flow-report.md.
+export type SignatureFieldType = "signature" | "initials" | "name" | "date";
+
+export interface SignatureField {
+  id: string;
+  signer_id: string;
+  page_number: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  field_type: SignatureFieldType;
+  required: boolean;
+  ai_suggested: boolean;
+}
+
+export interface SignatureFieldInput {
+  signer_id: string;
+  page_number: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  field_type: SignatureFieldType;
+  required: boolean;
 }
 
 export interface SignatureEventRow {
@@ -799,6 +827,42 @@ export interface SignerPublicPayload {
   waiting_for_prior: boolean;
   read_only: boolean;
   declined: boolean;
+  fields: SignatureField[];
+}
+
+// Templates — see docs/signature-placement-and-template-flow-report.md.
+export interface TemplateSummary {
+  id: string;
+  key: string;
+  title_en: string;
+  title_ar: string;
+  category: string | null;
+  language: "ar" | "en" | "both";
+  industry: string | null;
+  usage_count: number;
+  updated_at: string | null;
+}
+
+export interface TemplateVariableField {
+  key: string;
+  label_en: string;
+  label_ar: string;
+  type: "text" | "textarea" | "number" | "date";
+  required: boolean;
+}
+
+export interface TemplateDetail extends TemplateSummary {
+  description_en: string | null;
+  description_ar: string | null;
+  variables: TemplateVariableField[];
+  clauses: { title_en: string; title_ar: string }[];
+}
+
+export interface TemplatePreview {
+  template: TemplateSummary;
+  missing_variables: string[];
+  sections_en: { title: string; body: string }[];
+  sections_ar: { title: string; body: string }[];
 }
 
 export interface ContractVersionRow {

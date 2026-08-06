@@ -48,6 +48,7 @@ vi.mock("@/components/feedback/ToastProvider", () => ({
 
 vi.mock("@/components/SignatureCanvas", () => ({ default: () => null }));
 vi.mock("@/components/TypedSignaturePreview", () => ({ default: () => null }));
+vi.mock("@/components/SignerDocumentViewer", () => ({ default: () => null }));
 
 const DISCLOSURE_TEXT =
   "Demo electronic signature / توقيع إلكتروني تجريبي — هذا نموذج تجريبي وليس مزود توقيع إلكتروني معتمد قانونًا / this is a demo prototype, not a certified legally binding e-signature provider.";
@@ -166,6 +167,7 @@ describe("Public sign page — deterministic errors and disclosure", () => {
       waiting_for_prior: false,
       read_only: false,
       declined: false,
+      fields: [],
     });
     renderPage();
 
@@ -189,6 +191,7 @@ describe("Public sign page — deterministic errors and disclosure", () => {
       waiting_for_prior: false,
       read_only: false,
       declined: false,
+      fields: [],
     });
     declineSignerPortal.mockRejectedValue(new FakeApiError(409, "not_active_signer"));
     renderPage();

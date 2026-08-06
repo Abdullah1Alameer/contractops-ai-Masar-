@@ -455,6 +455,48 @@ export async function fetchSignatureSummary() {
   return api<import("./types").SignatureSummaryKpis>("/api/signature/summary");
 }
 
+// Signature field placement — see docs/signature-placement-and-template-flow-report.md.
+export async function fetchSignatureFields(requestId: string) {
+  return api<{ fields: import("./types").SignatureField[] }>(`/api/signature-requests/${requestId}/fields`);
+}
+
+export async function suggestSignatureFields(requestId: string) {
+  return api<{ fields: import("./types").SignatureField[] }>(`/api/signature-requests/${requestId}/fields/suggest`);
+}
+
+export async function saveSignatureFields(requestId: string, fields: import("./types").SignatureFieldInput[]) {
+  return apiJson<{ fields: import("./types").SignatureField[] }>(
+    `/api/signature-requests/${requestId}/fields`,
+    "PUT",
+    { fields }
+  );
+}
+
+// Templates — real "Use Template" flow, see docs/signature-placement-and-template-flow-report.md.
+export async function fetchTemplates() {
+  return api<{ templates: import("./types").TemplateSummary[] }>("/api/templates");
+}
+
+export async function fetchTemplateDetail(templateId: string) {
+  return api<import("./types").TemplateDetail>(`/api/templates/${encodeURIComponent(templateId)}`);
+}
+
+export async function previewTemplateContract(templateId: string, variables: Record<string, string>) {
+  return apiJson<import("./types").TemplatePreview>(
+    `/api/templates/${encodeURIComponent(templateId)}/preview`,
+    "POST",
+    { variables }
+  );
+}
+
+export async function createContractFromTemplate(templateId: string, variables: Record<string, string>) {
+  return apiJson<{ id: string; stage: string; status: string; template_id: string; version_id: string; version_number: number }>(
+    `/api/templates/${encodeURIComponent(templateId)}/create-contract`,
+    "POST",
+    { variables }
+  );
+}
+
 async function downloadAuthBlob(path: string): Promise<Blob> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { Authorization: `Bearer ${TOKEN}`, ...demoRoleHeader() },

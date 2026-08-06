@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 
 import Logo from "@/components/Logo";
 import SignatureCanvas from "@/components/SignatureCanvas";
+import SignerDocumentViewer from "@/components/SignerDocumentViewer";
 import TypedSignaturePreview from "@/components/TypedSignaturePreview";
 import { useToast } from "@/components/feedback/ToastProvider";
 import Badge from "@/components/ui/Badge";
@@ -48,6 +49,11 @@ export default function SignPage() {
   const [nameConfirm, setNameConfirm] = useState("");
   const [declineReason, setDeclineReason] = useState("");
   const [busy, setBusy] = useState(false);
+  // Gate: the signer must have jumped to/seen every one of their required
+  // fields at least once before submit is enabled — "field cannot be
+  // submitted before being completed" applies to the whole set, not just
+  // the signature capture widget.
+  const [allFieldsViewed, setAllFieldsViewed] = useState(false);
 
   // A single deterministic entry point for both the initial mount and manual
   // retry. `open` re-validates staleness/expiry/eligibility on every call (it is
@@ -65,6 +71,7 @@ export default function SignPage() {
 
   const submit = async () => {
     if (!data || !consent) return;
+    if (data.fields.length > 0 && !allFieldsViewed) return;
     let signature_value = "";
     if (method === "drawn") {
       if (!drawn) return;
@@ -191,12 +198,12 @@ export default function SignPage() {
 
       <div className="mx-auto max-w-4xl space-y-6 p-4 md:p-8">
       <Card>
-        <CardBody className="p-2">
+        <CardBody className="space-y-2 p-2">
           <p className="mb-2 px-2 text-xs text-gray-500">{t("signature.tab")}</p>
-          <iframe
-            title="document"
-            src={publicSignDocumentUrl(token)}
-            className="h-[55vh] w-full rounded-xl border-2 border-gray-200 bg-gray-50 shadow-inner"
+          <SignerDocumentViewer
+            documentUrl={publicSignDocumentUrl(token)}
+            fields={data.fields}
+            onAllFieldsViewed={() => setAllFieldsViewed(true)}
           />
         </CardBody>
       </Card>
@@ -235,8 +242,17 @@ export default function SignPage() {
             value={nameConfirm}
             onChange={(e) => setNameConfirm(e.target.value)}
           />
+          {data.fields.length > 0 && !allFieldsViewed && (
+            <p className="text-xs font-medium text-amber-700">{t("signature.fields.viewAllFirst")}</p>
+          )}
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 p-4 shadow-lg backdrop-blur md:static md:border-0 md:bg-transparent md:p-0 md:shadow-none">
-            <Button variant="primary" className="w-full md:w-auto" loading={busy} onClick={submit}>
+            <Button
+              variant="primary"
+              className="w-full md:w-auto"
+              loading={busy}
+              disabled={data.fields.length > 0 && !allFieldsViewed}
+              onClick={submit}
+            >
               {t("signature.signSubmit")}
             </Button>
           </div>

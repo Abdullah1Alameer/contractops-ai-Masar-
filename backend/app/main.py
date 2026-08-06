@@ -17,6 +17,7 @@ from .routers import (
     reviews_public,
     signature,
     signature_public,
+    templates,
     util,
     versions,
 )
@@ -46,6 +47,7 @@ app.include_router(counterparties.router, prefix="/api", dependencies=protected)
 app.include_router(approvals.router, prefix="/api", dependencies=protected)
 app.include_router(signature.router, prefix="/api", dependencies=protected)
 app.include_router(versions.router, prefix="/api", dependencies=protected)
+app.include_router(templates.router, prefix="/api", dependencies=protected)
 app.include_router(reviews_public.router, prefix="/api")
 app.include_router(signature_public.router, prefix="/api")
 

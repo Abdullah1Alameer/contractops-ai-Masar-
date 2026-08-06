@@ -39,6 +39,16 @@ vi.mock("@/lib/api", () => ({
   fetchSignatureBundle: (...args: unknown[]) => fetchSignatureBundle(...args),
   resendSignatureSigner: (...args: unknown[]) => resendSignatureSigner(...args),
   sendSignatureRequest: (...args: unknown[]) => sendSignatureRequest(...args),
+  // SignatureFieldPlacer's dependencies — not under test here, so a
+  // never-resolving/no-op stub is enough to keep the panel from crashing.
+  fetchContractFileBlob: () => new Promise(() => {}),
+  suggestSignatureFields: vi.fn(),
+  saveSignatureFields: vi.fn(),
+}));
+
+vi.mock("pdfjs-dist", () => ({
+  GlobalWorkerOptions: { workerSrc: "" },
+  getDocument: () => ({ promise: new Promise(() => {}) }),
 }));
 
 vi.mock("@/components/feedback/ToastProvider", () => ({
@@ -294,6 +304,20 @@ function draftBundle() {
       ],
       progress: { completed: 0, total: 1 },
       is_stale: false,
+      fields: [
+        {
+          id: "field-1",
+          signer_id: "signer-1",
+          page_number: 1,
+          x: 0.1,
+          y: 0.8,
+          width: 0.3,
+          height: 0.06,
+          field_type: "signature",
+          required: true,
+          ai_suggested: false,
+        },
+      ],
     },
     events: [],
     can_create: false,

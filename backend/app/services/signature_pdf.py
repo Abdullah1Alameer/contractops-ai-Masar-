@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import fitz
 
-from ..models import Contract, SignatureRequest, SignatureSigner, SignatureEvent
+from ..models import Contract, SignatureField, SignatureRequest, SignatureSigner, SignatureEvent
 from .storage import storage
 
 DEMO_FOOTER_EN = (
@@ -55,13 +55,13 @@ def _load_signature_image(signer: SignatureSigner) -> bytes | None:
         return None
 
 
-def build_signed_pdf(
-    contract: Contract,
-    request: SignatureRequest,
-    signers: list[SignatureSigner],
-) -> bytes:
-    base = original_bytes(contract)
-    doc = fitz.open(stream=base, filetype="pdf")
+def _append_legacy_signature_page(doc: "fitz.Document", request: SignatureRequest, signers: list[SignatureSigner]) -> None:
+    """Pre-field-placement fallback: appends a summary page listing every
+    signer and their captured mark, stacked vertically. Kept only for
+    signature requests created before signature_fields existed (no rows
+    persisted for them) so old/legacy signed PDFs can still be
+    regenerated/read — every request created going forward has real fields
+    and is embedded in place via build_signed_pdf's main path below."""
     page = doc.new_page(width=595, height=842)
     y = 40
     page.insert_text((40, y), "Signatures / التوقيعات", fontsize=16)
@@ -93,6 +93,77 @@ def build_signed_pdf(
     y = min(y + 20, 780)
     page.insert_text((40, y), DEMO_FOOTER_EN, fontsize=8)
     page.insert_text((40, y + 14), DEMO_FOOTER_AR, fontsize=8)
+
+
+def _initials_for(name: str) -> str:
+    parts = [p for p in (name or "").split() if p]
+    return "".join(p[0] for p in parts)[:4].upper() or "—"
+
+
+def build_signed_pdf(
+    contract: Contract,
+    request: SignatureRequest,
+    signers: list[SignatureSigner],
+    fields: list[SignatureField] | None = None,
+) -> bytes:
+    """Embeds each signer's mark at the exact page/coordinates confirmed in
+    signature_fields — signature image or typed text for `signature`
+    fields, and deterministic values for `initials`/`name`/`date` fields.
+    Falls back to the old "append a summary page" behavior only when a
+    request has no persisted fields at all (legacy requests predating this
+    fix — see _append_legacy_signature_page)."""
+    base = original_bytes(contract)
+    doc = fitz.open(stream=base, filetype="pdf")
+    fields = fields or []
+
+    by_signer: dict[str, list[SignatureField]] = {}
+    for f in fields:
+        by_signer.setdefault(str(f.signer_id), []).append(f)
+
+    placed_any = False
+    for s in sorted(signers, key=lambda x: x.signer_order):
+        signer_fields = by_signer.get(str(s.id), [])
+        if not signer_fields or not s.signed_at:
+            continue
+        img = _load_signature_image(s)
+        typed_text = signer_text_from_storage(s) if s.signature_type == "typed" else None
+        for f in signer_fields:
+            page_index = max(0, min(int(f.page_number) - 1, doc.page_count - 1))
+            page = doc[page_index]
+            rect = fitz.Rect(
+                float(f.x) * page.rect.width,
+                float(f.y) * page.rect.height,
+                (float(f.x) + float(f.width)) * page.rect.width,
+                (float(f.y) + float(f.height)) * page.rect.height,
+            )
+            placed_any = True
+            if f.field_type == "signature":
+                placed = False
+                if img and (img[:4] == b"\x89PNG" or img[:2] == b"\xff\xd8"):
+                    try:
+                        page.insert_image(rect, stream=img)
+                        placed = True
+                    except Exception:
+                        placed = False
+                if not placed and typed_text:
+                    page.insert_textbox(rect, typed_text, fontsize=14)
+            elif f.field_type == "initials":
+                page.insert_textbox(rect, _initials_for(s.name), fontsize=12)
+            elif f.field_type == "name":
+                page.insert_textbox(rect, s.name, fontsize=10)
+            elif f.field_type == "date":
+                page.insert_textbox(rect, s.signed_at.date().isoformat(), fontsize=9)
+
+    if not placed_any:
+        _append_legacy_signature_page(doc, request, signers)
+    else:
+        # Keep the demo disclosure visible without overlapping a placed
+        # field — stamp it small in a corner of the last page rather than
+        # appending a whole new page.
+        last = doc[-1]
+        last.insert_text((20, last.rect.height - 24), DEMO_FOOTER_EN[:130], fontsize=6)
+        last.insert_text((20, last.rect.height - 14), DEMO_FOOTER_AR[:130], fontsize=6)
+
     out = doc.tobytes()
     doc.close()
     return out

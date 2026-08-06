@@ -99,7 +99,31 @@ def signature_db():
     db.close()
 
 
-def _create(client, contract_id):
+def _place_fields(client, request_id, signer_ids, *, page_number=1):
+    response = client.put(
+        f"/api/signature-requests/{request_id}/fields",
+        headers=AUTH,
+        json={
+            "fields": [
+                {
+                    "signer_id": sid,
+                    "page_number": page_number,
+                    "x": 0.08,
+                    "y": 0.1 + index * 0.15,
+                    "width": 0.36,
+                    "height": 0.06,
+                    "field_type": "signature",
+                    "required": True,
+                }
+                for index, sid in enumerate(signer_ids)
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["fields"]
+
+
+def _create(client, contract_id, *, place_fields=True):
     response = client.post(
         f"/api/contracts/{contract_id}/signature-request",
         headers=AUTH,
@@ -125,7 +149,11 @@ def _create(client, contract_id):
         },
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    body = response.json()
+    if place_fields:
+        signer_ids = [s["id"] for s in body["signers"]]
+        _place_fields(client, body["request"]["id"], signer_ids)
+    return body
 
 
 def _send(client, request_id):

@@ -60,6 +60,10 @@ class Contract(Base):
     page_layout = Column(JSONB, nullable=True)
     is_template = Column(Boolean, nullable=False, default=False)
     template_category = Column(Text, nullable=True)
+    # Set when this contract was created via "Use Template" (see
+    # ContractTemplate below / docs/signature-placement-and-template-flow-report.md).
+    # NULL for every other creation path (normal upload).
+    template_id = Column(UUID(as_uuid=True), ForeignKey("contract_templates.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -485,6 +489,55 @@ class SignatureSigner(Base):
     user_agent = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SignatureField(Base):
+    """A placed field (signature/initials/name/date) for one signer,
+    anchored to a specific page and normalized (0..1) position within the
+    document that was current when the field was saved. Drives both the
+    internal placement UI and where the signer's mark is actually embedded
+    in the final signed PDF — see app/services/signature_pdf.py."""
+
+    __tablename__ = "signature_fields"
+    id = _uuid_pk()
+    signature_request_id = Column(
+        UUID(as_uuid=True), ForeignKey("signature_requests.id", ondelete="CASCADE"), nullable=False
+    )
+    signer_id = Column(UUID(as_uuid=True), ForeignKey("signature_signers.id", ondelete="CASCADE"), nullable=False)
+    version_id = Column(UUID(as_uuid=True), ForeignKey("contract_versions.id", ondelete="SET NULL"), nullable=True)
+    page_number = Column(Integer, nullable=False)
+    x = Column(Numeric(7, 5), nullable=False)
+    y = Column(Numeric(7, 5), nullable=False)
+    width = Column(Numeric(7, 5), nullable=False)
+    height = Column(Numeric(7, 5), nullable=False)
+    field_type = Column(Text, nullable=False, default="signature")
+    required = Column(Boolean, nullable=False, default=True)
+    ai_suggested = Column(Boolean, nullable=False, default=False)
+    created_by = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ContractTemplate(Base):
+    """A reusable contract template backing the Templates page's "Use
+    Template" flow — real, backend-persisted variables/clauses, not a
+    frontend-only seed list."""
+
+    __tablename__ = "contract_templates"
+    id = _uuid_pk()
+    key = Column(Text, nullable=False, unique=True)
+    title_en = Column(Text, nullable=False)
+    title_ar = Column(Text, nullable=False)
+    category = Column(Text, nullable=True)
+    language = Column(Text, nullable=False, default="both")
+    industry = Column(Text, nullable=True)
+    description_en = Column(Text, nullable=True)
+    description_ar = Column(Text, nullable=True)
+    variables = Column(JSONB, nullable=False, default=dict)
+    clauses = Column(JSONB, nullable=False, default=dict)
+    usage_count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class OutboundMessage(Base):

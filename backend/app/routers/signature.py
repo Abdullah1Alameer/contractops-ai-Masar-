@@ -42,6 +42,21 @@ class ActivateSignatureBody(BaseModel):
     evidence: str = Field(min_length=1, max_length=4000)
 
 
+class FieldInput(BaseModel):
+    signer_id: str
+    page_number: int = Field(ge=1)
+    x: float = Field(ge=0, lt=1)
+    y: float = Field(ge=0, lt=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+    field_type: str = "signature"
+    required: bool = True
+
+
+class ReplaceFieldsBody(BaseModel):
+    fields: list[FieldInput] = Field(min_length=1)
+
+
 def _map_err(e: Exception) -> HTTPException:
     if isinstance(e, sig_svc.SignatureError):
         return HTTPException(e.status_code, detail=e.payload)
@@ -152,6 +167,32 @@ def download_signed_document(request_id: uuid.UUID, db: Session = Depends(get_db
         raise HTTPException(404, detail={"error": "not_found"})
     data = storage.get(req.signed_file_url)
     return Response(content=data, media_type="application/pdf")
+
+
+@router.get("/signature-requests/{request_id}/fields")
+def get_signature_fields(request_id: uuid.UUID, db: Session = Depends(get_db)):
+    return {"fields": [sig_svc.serialize_field(f) for f in sig_svc.list_fields(request_id, db)]}
+
+
+@router.get("/signature-requests/{request_id}/fields/suggest")
+def suggest_signature_fields(request_id: uuid.UUID, db: Session = Depends(get_db)):
+    try:
+        return {"fields": sig_svc.suggest_fields(request_id, db)}
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
+        raise _map_err(e)
+
+
+@router.put("/signature-requests/{request_id}/fields")
+def put_signature_fields(
+    request_id: uuid.UUID,
+    body: ReplaceFieldsBody,
+    db: Session = Depends(get_db),
+    role: str = Depends(demo_role),
+):
+    try:
+        return {"fields": sig_svc.replace_fields(request_id, db, [f.model_dump() for f in body.fields], actor=role)}
+    except (ValueError, EmailDeliveryError, LifecycleError) as e:
+        raise _map_err(e)
 
 
 @router.get("/signature/summary")
