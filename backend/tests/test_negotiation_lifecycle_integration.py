@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
@@ -526,3 +527,138 @@ def test_serialization_and_workflow_summary_are_canonical(negotiation_db):
 
     contract_row = next(item for item in contracts.json() if item["id"] == str(contract.id))
     assert contract_row["workflow_summary"]["negotiation_status"] == "pending_analysis"
+
+
+def _override(client: TestClient, negotiation_id, *, role="legal", reason="Synthetic authorized override"):
+    return client.post(
+        f"/api/negotiations/{negotiation_id}/record-agreement",
+        headers={**AUTH, "X-Demo-Role": role},
+        json={"reason": reason} if reason is not None else {},
+    )
+
+
+def test_internal_agreement_override_forbidden_for_non_legal_executive(negotiation_db):
+    _, create_case = negotiation_db
+    _, _, _, negotiations = create_case()
+
+    response = _override(TestClient(app), negotiations[0].id, role="business_owner")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "negotiation_override_role_required"
+
+
+def test_internal_agreement_override_requires_reason(negotiation_db):
+    _, create_case = negotiation_db
+    _, _, _, negotiations = create_case()
+
+    response = _override(TestClient(app), negotiations[0].id, reason="   ")
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "negotiation_reason_required"
+
+
+def test_internal_agreement_override_resolves_sole_item_and_transitions_via_lifecycle_service(negotiation_db):
+    db, create_case = negotiation_db
+    contract, version, review, negotiations = create_case()
+    negotiation = negotiations[0]
+
+    response = _override(TestClient(app), negotiation.id, role="legal", reason="Verbal agreement confirmed by phone")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["workflow_status"] == "accepted"
+    assert payload["closure_outcome"] == "agreement_reached"
+    assert payload["contract_stage"] == "internal_review"
+    assert payload["unresolved_count"] == 0
+
+    db.expire_all()
+    stored = db.get(Negotiation, negotiation.id)
+    assert stored.workflow_status == "accepted"
+    assert db.get(Contract, contract.id).stage == "internal_review"
+
+    events = _events(db, contract.id)
+    assert "negotiation_agreement_override_used" in events
+    assert "negotiation_accepted" in events
+    assert "contract_entered_internal_review" in events
+    assert "negotiation_closed" in events
+
+    # The transition used the exact same LifecycleService event as the public
+    # counterparty-approval path (see apply_followup_review_decision) — this
+    # is an alternate audited trigger, not a bypass, and no direct
+    # `contract.stage = ...` write occurred outside LifecycleService.
+    override_event = (
+        db.query(ActivityEvent)
+        .filter_by(contract_id=contract.id, event_type="negotiation_agreement_override_used")
+        .one()
+    )
+    assert override_event.event_metadata.get("reason_present") is True
+    assert "Verbal agreement confirmed by phone" not in json.dumps(override_event.event_metadata)
+    assert override_event.actor == "legal"
+
+
+def test_internal_agreement_override_allows_executive_role(negotiation_db):
+    db, create_case = negotiation_db
+    contract, _, _, negotiations = create_case()
+
+    response = _override(TestClient(app), negotiations[0].id, role="executive")
+
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    assert db.get(Contract, contract.id).stage == "internal_review"
+
+
+def test_internal_agreement_override_with_other_unresolved_items_keeps_negotiation_stage(negotiation_db):
+    db, create_case = negotiation_db
+    contract, _, _, negotiations = create_case(item_count=2)
+
+    response = _override(TestClient(app), negotiations[0].id, role="legal")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["contract_stage"] == "negotiation"
+    assert payload["unresolved_count"] == 1
+
+    db.expire_all()
+    assert db.get(Contract, contract.id).stage == "negotiation"
+    assert db.get(Negotiation, negotiations[0].id).workflow_status == "accepted"
+    assert db.get(Negotiation, negotiations[1].id).workflow_status == "pending_analysis"
+
+
+def test_internal_agreement_override_rejects_already_closed_negotiation(negotiation_db):
+    db, create_case = negotiation_db
+    _, _, _, negotiations = create_case()
+    negotiation = negotiations[0]
+    negotiation.workflow_status = "accepted"
+    negotiation.status = "closed"
+    db.commit()
+
+    response = _override(TestClient(app), negotiation.id, role="legal")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "negotiation_closed"
+
+
+def test_internal_agreement_override_rejects_stale_version(negotiation_db):
+    db, create_case = negotiation_db
+    _, version, _, negotiations = create_case()
+    negotiation = negotiations[0]
+    version.is_current = False
+    replacement = ContractVersion(
+        id=uuid4(),
+        contract_id=negotiation.contract_id,
+        version_number=2,
+        version_label="v2",
+        parent_version_id=version.id,
+        source="manual_upload",
+        status="ready",
+        file_path="synthetic/replacement.pdf",
+        is_current=True,
+        created_by="synthetic-test",
+    )
+    db.add(replacement)
+    db.commit()
+
+    response = _override(TestClient(app), negotiation.id, role="legal")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "workflow_stale"

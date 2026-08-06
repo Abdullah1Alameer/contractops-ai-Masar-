@@ -17,6 +17,7 @@ from ..services.negotiation import (
     apply_patch,
     list_negotiation_candidates,
     list_negotiations_for_contract,
+    record_agreement_override,
     send_updated,
     serialize_negotiation,
 )
@@ -46,6 +47,10 @@ class PatchNegotiationBody(BaseModel):
 
 
 class AbandonNegotiationBody(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+class RecordAgreementBody(BaseModel):
     reason: str = Field(default="", max_length=2000)
 
 
@@ -131,6 +136,22 @@ def send_negotiation(
         if str(e) == "negotiation_sent":
             raise HTTPException(409, detail={"error": str(e)})
         raise HTTPException(400, detail={"error": str(e)})
+
+
+@router.post("/negotiations/{negotiation_id}/record-agreement")
+def record_negotiation_agreement(
+    negotiation_id: _uuid.UUID,
+    body: RecordAgreementBody,
+    db: Session = Depends(get_db),
+    actor: str = Depends(demo_role),
+):
+    """Authorized internal override — see `record_agreement_override` for the
+    canonical-lifecycle reasoning. Not a replacement for the counterparty's
+    public approval; a distinct, audited trigger for the same transition."""
+    try:
+        return record_agreement_override(negotiation_id, db, actor=actor, reason=body.reason)
+    except (NegotiationError, ReviewError, LifecycleError) as error:
+        _negotiation_http_error(error)
 
 
 @router.post("/negotiations/{negotiation_id}/abandon")

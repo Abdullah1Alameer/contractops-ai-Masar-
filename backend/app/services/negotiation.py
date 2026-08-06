@@ -55,6 +55,13 @@ NEGOTIATION_ELIGIBLE_REVIEW = frozenset({"rejected", "changes_requested"})
 _TERMINAL_WORKFLOW_STATUS = frozenset({"accepted", "closed"})
 _LIFECYCLE_META_KEY = "lifecycle"
 
+# Authorized internal override of the normal "counterparty clicks approve on
+# the public follow-up link" path (docs/contract-lifecycle-policy.md §5).
+# Mirrors the approval-start override's role restriction and reason-redaction
+# convention (see approvals.OVERRIDE_ROLES / approvals._reason_audit).
+AGREEMENT_OVERRIDE_ROLES = frozenset({"legal", "executive"})
+AGREEMENT_OVERRIDE_EVENT = "negotiation_agreement_override_used"
+
 
 class NegotiationClosureOutcome(str, Enum):
     AGREEMENT_REACHED = "agreement_reached"
@@ -1072,6 +1079,117 @@ def apply_followup_review_decision(
         _raise_negotiation_error(422, "negotiation_response_required")
 
     payload = serialize_negotiation(result_row, db)
+    payload["unresolved_count"] = len(unresolved)
+    payload["contract_stage"] = contract.stage
+    return payload
+
+
+def _override_reason_audit(reason: str) -> dict[str, Any]:
+    """Reason evidence for the activity trail — presence + hash, never the
+    text itself. Mirrors approvals._reason_audit's redaction convention."""
+    digest = hashlib.sha256(reason.encode("utf-8")).hexdigest()[:16]
+    return {"reason_present": True, "reason_hash": digest}
+
+
+def record_agreement_override(
+    negotiation_id,
+    db: Session,
+    *,
+    actor: str,
+    reason: str,
+) -> dict:
+    """Authorized internal override: record agreement reached on one
+    negotiation item without waiting for the counterparty to click approve
+    on the public follow-up review link.
+
+    This does not bypass LifecycleService or invent new stage semantics: it
+    closes the item with the same `agreement_reached` outcome and fires the
+    exact same `NEGOTIATION_ACCEPTED` event, through the same
+    `LifecycleService.transition()` call, that
+    `apply_followup_review_decision` uses for a real counterparty approval
+    (docs/contract-lifecycle-policy.md §5). The contract only reaches
+    `internal_review` once every current-version negotiation item is
+    resolved, exactly as the public path requires — this override changes
+    who/how one item is marked resolved, not the transition rule itself.
+    """
+    if actor not in AGREEMENT_OVERRIDE_ROLES:
+        _raise_negotiation_error(
+            403,
+            "negotiation_override_role_required",
+            required_roles=sorted(AGREEMENT_OVERRIDE_ROLES),
+        )
+    clean_reason = (reason or "").strip()
+    if not clean_reason:
+        _raise_negotiation_error(422, "negotiation_reason_required")
+
+    try:
+        negotiation = _lock_negotiation(negotiation_id, db)
+        contract = _lock_contract(negotiation.contract_id, db)
+        current = _validate_actionable(
+            negotiation,
+            contract,
+            _locked_current_version(contract.id, db),
+        )
+        _mark_closed(
+            negotiation,
+            outcome=NegotiationClosureOutcome.AGREEMENT_REACHED,
+            workflow_status="accepted",
+        )
+        _set_lifecycle_meta(
+            negotiation,
+            override_used=True,
+            override_actor=actor,
+            **_override_reason_audit(clean_reason),
+        )
+        unresolved = _unresolved_rows(contract.id, current.id, db)
+        safe = _safe_metadata(
+            negotiation,
+            current,
+            actor_type="internal",
+            outcome=NegotiationClosureOutcome.AGREEMENT_REACHED.value,
+        )
+        metadata = {**safe, "unresolved_count": len(unresolved), "override_used": True}
+
+        approvals.log_activity(
+            db,
+            contract.id,
+            AGREEMENT_OVERRIDE_EVENT,
+            actor=actor,
+            metadata={**_override_reason_audit(clean_reason), "negotiation_id": str(negotiation.id)},
+        )
+        if not unresolved:
+            metadata["negotiations_resolved"] = True
+            _transition_and_log(
+                db,
+                contract=contract,
+                negotiation=negotiation,
+                version=current,
+                event=LifecycleEvent.NEGOTIATION_ACCEPTED,
+                actor=actor,
+                actor_type="internal",
+                metadata=metadata,
+            )
+        else:
+            approvals.log_activity(
+                db,
+                contract.id,
+                LifecycleEvent.NEGOTIATION_ACCEPTED.value,
+                actor=actor,
+                metadata=metadata,
+            )
+        approvals.log_activity(
+            db,
+            contract.id,
+            LifecycleEvent.NEGOTIATION_CLOSED.value,
+            actor=actor,
+            metadata=metadata,
+        )
+        _commit(db, negotiation, contract)
+    except Exception:
+        db.rollback()
+        raise
+
+    payload = serialize_negotiation(negotiation, db)
     payload["unresolved_count"] = len(unresolved)
     payload["contract_stage"] = contract.stage
     return payload
